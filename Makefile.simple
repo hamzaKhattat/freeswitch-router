@@ -1,0 +1,45 @@
+CC = gcc
+CFLAGS = -Wall -O2 -g -pthread -I./include -I/usr/include/postgresql
+LDFLAGS = -lpq -lpthread -lreadline -lm -luuid -ljson-c -lmicrohttpd
+
+SOURCES = src/main.c \
+    src/api/handlers.c \
+    src/api/route_handler.c \
+    src/cli/cli.c \
+    src/cli/cli_commands.c \
+    src/commands/calls_cmd.c \
+    src/commands/did_cmd.c \
+    src/commands/monitor_cmd.c \
+    src/commands/monitor_fix.c \
+    src/commands/provider_cmd.c \
+    src/commands/provider_mgmt.c \
+    src/commands/route_cmd.c \
+    src/commands/sip_cmd.c \
+    src/commands/stats_cmd.c \
+    src/core/config.c \
+    src/core/models.c \
+    src/core/server.c \
+    src/core/utils.c \
+    src/db/cache.c \
+    src/db/database_pg.c \
+    src/router/load_balancer.c \
+    src/router/router.c \
+    src/sip/freeswitch_handler.c \
+    src/sip/sip_server_dynamic.c \
+    src/sip/sip_server_global.c \
+    src/freeswitch/freeswitch_integration.c \
+    src/freeswitch/fs_xml_generator.c \
+    src/utils/logger.c
+
+OBJECTS = $(SOURCES:.c=.o)
+
+router: $(OBJECTS)
+	$(CC) $(OBJECTS) -o router $(LDFLAGS)
+
+%.o: %.c
+	$(CC) $(CFLAGS) -c $< -o $@
+
+clean:
+	rm -f $(OBJECTS) router
+
+.PHONY: clean

@@ -1,0 +1,205 @@
+#!/bin/bash
+# format_fix.sh - Fix format string issues in fs_xml_generator.c
+
+cd /root/freeswitch-router
+
+echo "Fixing format string issues in fs_xml_generator.c..."
+
+# Backup the original file
+cp src/freeswitch/fs_xml_generator.c src/freeswitch/fs_xml_generator.c.backup
+
+# Fix the tone stream format issue
+sed -i 's/tone_stream:\/\/%(1000,0,440)/tone_stream:\/\/%%(1000,0,440)/g' src/freeswitch/fs_xml_generator.c
+
+# Create a fixed version of the Lua generation function
+cat > /tmp/lua_fix.c << 'EOF'
+// FIXED: Generate improved route handler Lua script
+int fs_generate_route_handler_lua(void) {
+    char filepath[512];
+    FILE *fp;
+    
+    snprintf(filepath, sizeof(filepath), "%s/route_handler.lua", FS_SCRIPTS_DIR);
+    fp = fopen(filepath, "w");
+    if (!fp) {
+        LOG_ERROR("Failed to create route_handler.lua");
+        return -1;
+    }
+    
+    fprintf(fp, "-- Dynamic Route Handler for S1->S2->S3->S2->S4 flow\n");
+    fprintf(fp, "-- Generated: %ld\n", time(NULL));
+    fprintf(fp, "\n");
+    
+    fprintf(fp, "local stage = argv[1] or \"unknown\"\n");
+    fprintf(fp, "local route_id = argv[2] or \"0\"\n");
+    fprintf(fp, "local next_provider = argv[3] or \"\"\n");
+    fprintf(fp, "local final_provider = argv[4] or \"\"\n");
+    fprintf(fp, "\n");
+    
+    fprintf(fp, "local dbh = freeswitch.Dbh(\"pgsql://router:router123@localhost/router_db\")\n");
+    fprintf(fp, "if not dbh:connected() then\n");
+    fprintf(fp, "    freeswitch.consoleLog(\"ERROR\", \"Failed to connect to database\\n\")\n");
+    fprintf(fp, "    session:hangup(\"TEMPORARY_FAILURE\")\n");
+    fprintf(fp, "    return\n");
+    fprintf(fp, "end\n");
+    fprintf(fp, "\n");
+    
+    fprintf(fp, "local call_uuid = session:getVariable(\"uuid\")\n");
+    fprintf(fp, "local ani = session:getVariable(\"caller_id_number\")\n");
+    fprintf(fp, "local dnis = session:getVariable(\"destination_number\")\n");
+    fprintf(fp, "local network_addr = session:getVariable(\"network_addr\")\n");
+    fprintf(fp, "\n");
+    
+    fprintf(fp, "freeswitch.consoleLog(\"INFO\", \"Route Handler: Stage=\" .. stage .. \", Route=\" .. route_id .. \", ANI=\" .. (ani or \"nil\") .. \", DNIS=\" .. (dnis or \"nil\") .. \", From=\" .. (network_addr or \"nil\") .. \"\\n\")\n");
+    fprintf(fp, "\n");
+    
+    fprintf(fp, "if not ani or not dnis then\n");
+    fprintf(fp, "    freeswitch.consoleLog(\"ERROR\", \"Missing ANI or DNIS\\n\")\n");
+    fprintf(fp, "    session:hangup(\"PROTOCOL_ERROR\")\n");
+    fprintf(fp, "    dbh:release()\n");
+    fprintf(fp, "    return\n");
+    fprintf(fp, "end\n");
+    fprintf(fp, "\n");
+    
+    fprintf(fp, "if stage == \"origin\" then\n");
+    fprintf(fp, "    freeswitch.consoleLog(\"INFO\", \"Processing origin call (S1->S2->S3)\\n\")\n");
+    fprintf(fp, "    session:setVariable(\"original_ani\", ani)\n");
+    fprintf(fp, "    session:setVariable(\"original_dnis\", dnis)\n");
+    fprintf(fp, "    session:setVariable(\"route_id\", route_id)\n");
+    fprintf(fp, "    session:setVariable(\"call_stage\", \"1\")\n");
+    fprintf(fp, "    \n");
+    fprintf(fp, "    local sql = \"SELECT did FROM dids WHERE in_use = false AND active = true ORDER BY did LIMIT 1\"\n");
+    fprintf(fp, "    local did = nil\n");
+    fprintf(fp, "    \n");
+    fprintf(fp, "    dbh:query(sql, function(row)\n");
+    fprintf(fp, "        did = row.did\n");
+    fprintf(fp, "    end)\n");
+    fprintf(fp, "    \n");
+    fprintf(fp, "    if not did then\n");
+    fprintf(fp, "        freeswitch.consoleLog(\"ERROR\", \"No available DID for call routing\\n\")\n");
+    fprintf(fp, "        session:hangup(\"NORMAL_CIRCUIT_CONGESTION\")\n");
+    fprintf(fp, "        dbh:release()\n");
+    fprintf(fp, "        return\n");
+    fprintf(fp, "    end\n");
+    fprintf(fp, "    \n");
+    fprintf(fp, "    local update_sql = \"UPDATE dids SET in_use = true, destination = '\" .. dnis .. \"', original_ani = '\" .. ani .. \"', call_id = '\" .. call_uuid .. \"', allocated_at = CURRENT_TIMESTAMP WHERE did = '\" .. did .. \"'\"\n");
+    fprintf(fp, "    \n");
+    fprintf(fp, "    local update_result = dbh:query(update_sql)\n");
+    fprintf(fp, "    if not update_result then\n");
+    fprintf(fp, "        freeswitch.consoleLog(\"ERROR\", \"Failed to allocate DID: \" .. did .. \"\\n\")\n");
+    fprintf(fp, "        session:hangup(\"TEMPORARY_FAILURE\")\n");
+    fprintf(fp, "        dbh:release()\n");
+    fprintf(fp, "        return\n");
+    fprintf(fp, "    end\n");
+    fprintf(fp, "    \n");
+    fprintf(fp, "    freeswitch.consoleLog(\"INFO\", \"Allocated DID: \" .. did .. \" for call \" .. call_uuid .. \"\\n\")\n");
+    fprintf(fp, "    \n");
+    fprintf(fp, "    local call_sql = \"INSERT INTO calls (uuid, ani, dnis, provider, route_id, status, created_at) VALUES ('\" .. call_uuid .. \"', '\" .. ani .. \"', '\" .. dnis .. \"', 's2-router', \" .. route_id .. \", 'routing', CURRENT_TIMESTAMP)\"\n");
+    fprintf(fp, "    dbh:query(call_sql)\n");
+    fprintf(fp, "    \n");
+    fprintf(fp, "    session:setVariable(\"sip_h_X-Original-ANI\", ani)\n");
+    fprintf(fp, "    session:setVariable(\"sip_h_X-Original-DNIS\", dnis)\n");
+    fprintf(fp, "    session:setVariable(\"sip_h_X-Route-ID\", route_id)\n");
+    fprintf(fp, "    session:setVariable(\"sip_h_X-DID\", did)\n");
+    fprintf(fp, "    session:setVariable(\"sip_h_X-Call-Stage\", \"1\")\n");
+    fprintf(fp, "    \n");
+    fprintf(fp, "    session:setVariable(\"effective_caller_id_number\", dnis)\n");
+    fprintf(fp, "    session:setVariable(\"effective_caller_id_name\", \"S2-Router\")\n");
+    fprintf(fp, "    \n");
+    fprintf(fp, "    local bridge_str = \"sofia/gateway/\" .. next_provider .. \"/\" .. did\n");
+    fprintf(fp, "    freeswitch.consoleLog(\"INFO\", \"S1->S3: Bridging to \" .. bridge_str .. \"\\n\")\n");
+    fprintf(fp, "    session:execute(\"bridge\", bridge_str)\n");
+    fprintf(fp, "    \n");
+    fprintf(fp, "elseif stage == \"intermediate\" then\n");
+    fprintf(fp, "    freeswitch.consoleLog(\"INFO\", \"Processing intermediate return call (S3->S2->S4)\\n\")\n");
+    fprintf(fp, "    local did = dnis\n");
+    fprintf(fp, "    \n");
+    fprintf(fp, "    local lookup_sql = \"SELECT destination, original_ani, call_id FROM dids WHERE did = '\" .. did .. \"' AND in_use = true\"\n");
+    fprintf(fp, "    local orig_ani = nil\n");
+    fprintf(fp, "    local orig_dnis = nil\n");
+    fprintf(fp, "    local orig_call_id = nil\n");
+    fprintf(fp, "    \n");
+    fprintf(fp, "    dbh:query(lookup_sql, function(row)\n");
+    fprintf(fp, "        orig_dnis = row.destination\n");
+    fprintf(fp, "        orig_ani = row.original_ani\n");
+    fprintf(fp, "        orig_call_id = row.call_id\n");
+    fprintf(fp, "    end)\n");
+    fprintf(fp, "    \n");
+    fprintf(fp, "    if not orig_dnis or not orig_ani then\n");
+    fprintf(fp, "        freeswitch.consoleLog(\"WARN\", \"Using SIP headers as fallback for call info\\n\")\n");
+    fprintf(fp, "        orig_ani = session:getVariable(\"sip_h_X-Original-ANI\") or ani\n");
+    fprintf(fp, "        orig_dnis = session:getVariable(\"sip_h_X-Original-DNIS\") or dnis\n");
+    fprintf(fp, "    end\n");
+    fprintf(fp, "    \n");
+    fprintf(fp, "    if not orig_dnis then\n");
+    fprintf(fp, "        freeswitch.consoleLog(\"ERROR\", \"Cannot determine original DNIS for DID: \" .. did .. \"\\n\")\n");
+    fprintf(fp, "        session:hangup(\"UNSPECIFIED\")\n");
+    fprintf(fp, "        dbh:release()\n");
+    fprintf(fp, "        return\n");
+    fprintf(fp, "    end\n");
+    fprintf(fp, "    \n");
+    fprintf(fp, "    freeswitch.consoleLog(\"INFO\", \"DID lookup: DID=\" .. did .. \", Original ANI=\" .. (orig_ani or \"unknown\") .. \", Original DNIS=\" .. orig_dnis .. \"\\n\")\n");
+    fprintf(fp, "    \n");
+    fprintf(fp, "    local call_update_sql = \"UPDATE calls SET status = 'forwarding', updated_at = CURRENT_TIMESTAMP WHERE uuid = '\" .. call_uuid .. \"' OR route_id = \" .. route_id\n");
+    fprintf(fp, "    dbh:query(call_update_sql)\n");
+    fprintf(fp, "    \n");
+    fprintf(fp, "    local release_sql = \"UPDATE dids SET in_use = false, destination = NULL, original_ani = NULL, call_id = NULL, allocated_at = NULL WHERE did = '\" .. did .. \"'\"\n");
+    fprintf(fp, "    dbh:query(release_sql)\n");
+    fprintf(fp, "    freeswitch.consoleLog(\"INFO\", \"Released DID: \" .. did .. \"\\n\")\n");
+    fprintf(fp, "    \n");
+    fprintf(fp, "    session:setVariable(\"effective_caller_id_number\", orig_ani)\n");
+    fprintf(fp, "    session:setVariable(\"effective_caller_id_name\", \"S2-Router\")\n");
+    fprintf(fp, "    \n");
+    fprintf(fp, "    session:setVariable(\"sip_h_X-Original-ANI\", orig_ani)\n");
+    fprintf(fp, "    session:setVariable(\"sip_h_X-Original-DNIS\", orig_dnis)\n");
+    fprintf(fp, "    session:setVariable(\"sip_h_X-Route-ID\", route_id)\n");
+    fprintf(fp, "    session:setVariable(\"sip_h_X-Call-Stage\", \"2\")\n");
+    fprintf(fp, "    \n");
+    fprintf(fp, "    local bridge_str = \"sofia/gateway/\" .. final_provider .. \"/\" .. orig_dnis\n");
+    fprintf(fp, "    freeswitch.consoleLog(\"INFO\", \"S3->S4: Bridging to \" .. bridge_str .. \"\\n\")\n");
+    fprintf(fp, "    freeswitch.consoleLog(\"INFO\", \"Call restoration: ANI=\" .. orig_ani .. \", DNIS=\" .. orig_dnis .. \"\\n\")\n");
+    fprintf(fp, "    session:execute(\"bridge\", bridge_str)\n");
+    fprintf(fp, "    \n");
+    fprintf(fp, "else\n");
+    fprintf(fp, "    freeswitch.consoleLog(\"ERROR\", \"Unknown stage: \" .. stage .. \"\\n\")\n");
+    fprintf(fp, "    session:hangup(\"UNSPECIFIED\")\n");
+    fprintf(fp, "end\n");
+    fprintf(fp, "\n");
+    fprintf(fp, "dbh:release()\n");
+    fprintf(fp, "freeswitch.consoleLog(\"INFO\", \"Route handler completed for stage: \" .. stage .. \"\\n\")\n");
+    
+    fclose(fp);
+    
+    LOG_INFO("Generated improved route_handler.lua");
+    return 0;
+}
+EOF
+
+# Find the function and replace it
+awk '
+/^int fs_generate_route_handler_lua\(void\)/ {
+    # Found the function, replace everything until the next function or end of file
+    print "// This function was replaced with fixed version"
+    while (getline > 0) {
+        if (/^[a-zA-Z_][a-zA-Z0-9_]*\s+[a-zA-Z_][a-zA-Z0-9_]*\(/) {
+            # Found next function, print it and continue normally
+            print
+            break
+        }
+    }
+}
+{ print }
+' src/freeswitch/fs_xml_generator.c > /tmp/fs_xml_generator_fixed.c
+
+# Append the fixed function
+cat /tmp/lua_fix.c >> /tmp/fs_xml_generator_fixed.c
+
+# Replace the original file
+mv /tmp/fs_xml_generator_fixed.c src/freeswitch/fs_xml_generator.c
+
+echo "Format string issues fixed!"
+echo "Now recompiling..."
+
+make clean
+make
+
+echo "Compilation completed!"

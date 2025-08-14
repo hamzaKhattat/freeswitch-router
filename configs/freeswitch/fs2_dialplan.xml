@@ -1,0 +1,32 @@
+<!-- FreeSWITCH Dialplan for FS2 Router -->
+<include>
+  <context name="fs2-router">
+    <!-- Handle incoming calls from FS1 -->
+    <extension name="inbound_from_fs1">
+      <condition field="network_addr" expression="^10\.0\.0\.1$">
+        <action application="set" data="router_source=FS1"/>
+        <action application="lua" data="scripts/router_handler.lua"/>
+      </condition>
+    </extension>
+
+    <!-- Handle return calls from FS3 -->
+    <extension name="return_from_fs3">
+      <condition field="network_addr" expression="^10\.0\.0\.3$">
+        <condition field="destination_number" expression="^1(\d+)$">
+          <action application="set" data="router_source=FS3"/>
+          <action application="set" data="is_return_call=true"/>
+          <action application="set" data="original_dnis=$1"/>
+          <action application="lua" data="scripts/router_return_handler.lua"/>
+        </condition>
+      </condition>
+    </extension>
+
+    <!-- Default routing handler -->
+    <extension name="default_route">
+      <condition field="destination_number" expression="^(\d+)$">
+        <action application="set" data="destination_dnis=$1"/>
+        <action application="lua" data="scripts/router_handler.lua"/>
+      </condition>
+    </extension>
+  </context>
+</include>

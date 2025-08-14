@@ -1,0 +1,14 @@
+--- src/router/router.c
++++ src/router/router.c
+@@ -74,8 +74,9 @@
+     // Simple routing logic - find matching provider
+     char sql[1024];
+     snprintf(sql, sizeof(sql),
+-        "SELECT p.name FROM routes r "
+-        "JOIN providers p ON r.provider_id = p.id "
++        "SELECT COALESCE(p.name, r.intermediate_provider) as provider_name "
++        "FROM routes r "
++        "LEFT JOIN providers p ON r.provider_id = p.id "
+         "WHERE '%s' GLOB r.pattern AND r.active = 1 "
+         "ORDER BY r.priority LIMIT 1",
+         request->dnis);

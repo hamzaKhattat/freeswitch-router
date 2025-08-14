@@ -1,0 +1,99 @@
+# FreeSWITCH Router Makefile
+
+# Compiler and flags
+CC = gcc
+CFLAGS = -Wall -Wextra -g -O2 -I./include -I./src
+LDFLAGS = -lpthread -lmicrohttpd -lsqlite3 -lhiredis -ljson-c -lm
+
+# Directories
+SRC_DIR = src
+BUILD_DIR = build
+BIN_DIR = build
+
+# Target binary
+TARGET = $(BIN_DIR)/freeswitch_router
+
+# Source files
+SRCS = $(SRC_DIR)/main.c \
+       $(SRC_DIR)/core/config.c \
+       $(SRC_DIR)/core/logging.c \
+       $(SRC_DIR)/core/server.c \
+       $(SRC_DIR)/core/utils.c \
+       $(SRC_DIR)/db/database.c \
+       $(SRC_DIR)/db/cache.c \
+       $(SRC_DIR)/sip/freeswitch_handler.c \
+       $(SRC_DIR)/router/router.c \
+       $(SRC_DIR)/router/load_balancer.c \
+       $(SRC_DIR)/api/handlers.c \
+       $(SRC_DIR)/cli/cli.c \
+       $(SRC_DIR)/cli/cli_commands.c \
+       $(SRC_DIR)/commands/provider_cmd.c \
+       $(SRC_DIR)/commands/route_cmd.c \
+       $(SRC_DIR)/commands/did_cmd.c \
+       $(SRC_DIR)/commands/monitor_cmd.c \
+       $(SRC_DIR)/commands/stats_cmd.c \
+       $(SRC_DIR)/commands/calls_cmd.c \
+       $(SRC_DIR)/freeswitch/freeswitch_integration.c
+
+# Object files
+OBJS = $(SRCS:$(SRC_DIR)/%.c=$(BUILD_DIR)/%.o)
+
+# Default target
+all: directories $(TARGET)
+
+# Create necessary directories
+directories:
+	@mkdir -p $(BUILD_DIR)
+	@mkdir -p $(BUILD_DIR)/core
+	@mkdir -p $(BUILD_DIR)/db
+	@mkdir -p $(BUILD_DIR)/sip
+	@mkdir -p $(BUILD_DIR)/router
+	@mkdir -p $(BUILD_DIR)/api
+	@mkdir -p $(BUILD_DIR)/cli
+	@mkdir -p $(BUILD_DIR)/commands
+	@mkdir -p $(BUILD_DIR)/freeswitch
+	@mkdir -p logs
+
+# Build the target
+$(TARGET): $(OBJS)
+	@echo "Linking $@..."
+	@$(CC) $(OBJS) -o $@ $(LDFLAGS)
+	@echo "Build complete: $@"
+
+# Compile source files to object files
+$(BUILD_DIR)/%.o: $(SRC_DIR)/%.c
+	@echo "Compiling $<..."
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+# Clean build files
+clean:
+	@echo "Cleaning build files..."
+	@rm -rf $(BUILD_DIR)
+	@rm -f $(TARGET)
+	@echo "Clean complete"
+
+# Install (optional)
+install: $(TARGET)
+	@echo "Installing..."
+	@cp $(TARGET) /usr/local/bin/
+	@echo "Installation complete"
+
+# Run the router
+run: $(TARGET)
+	@$(TARGET)
+
+# Build and run
+dev: clean all run
+
+# Show help
+help:
+	@echo "FreeSWITCH Router Makefile"
+	@echo "Usage:"
+	@echo "  make         - Build the router"
+	@echo "  make clean   - Remove build files"
+	@echo "  make run     - Run the router"
+	@echo "  make dev     - Clean, build and run"
+	@echo "  make install - Install to /usr/local/bin"
+
+# Phony targets
+.PHONY: all clean directories install run dev help

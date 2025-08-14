@@ -1,0 +1,62 @@
+# Makefile for FreeSWITCH Router
+
+CC = gcc
+CFLAGS = -Wall -Wextra -O2 -g -fPIC
+LDFLAGS = -pthread -lsqlite3 -lmicrohttpd -ljson-c -lreadline
+
+# FreeSWITCH specific flags
+FS_INCLUDES = -I/usr/local/freeswitch/include/freeswitch
+FS_LIBS = -L/usr/local/freeswitch/lib -lfreeswitch
+
+TARGET = freeswitch_router
+MOD_TARGET = mod_fs_router.so
+
+SRCS = src/main_enhanced.c \
+      src/sip/sip_server_enhanced.c \
+      src/router/router_enhanced.c \
+      src/db/database.c \
+      src/db/cache.c \
+      src/core/config.c \
+      src/core/server.c \
+      src/core/models.c \
+      src/api/handlers.c \
+      src/api/route_handler.c \
+      src/cli/cli.c \
+      src/cli/cli_commands.c \
+      src/commands/provider_cmd.c \
+      src/commands/route_cmd.c \
+      src/commands/did_cmd.c \
+      src/commands/monitor_cmd.c \
+      src/commands/stats_cmd.c \
+      src/commands/calls_cmd.c \
+      src/commands/sip_cmd.c \
+      src/utils/logger.c
+
+MOD_SRCS = src/freeswitch/fs_router_api.c \
+          src/router/router_enhanced.c \
+          src/db/database.c
+
+OBJS = $(SRCS:.c=.o)
+MOD_OBJS = $(MOD_SRCS:.c=.o)
+
+INCLUDES = -Iinclude
+
+all: $(TARGET) $(MOD_TARGET)
+
+$(TARGET): $(OBJS)
+   $(CC) $(OBJS) -o $@ $(LDFLAGS)
+
+$(MOD_TARGET): $(MOD_OBJS)
+   $(CC) -shared $(MOD_OBJS) -o $@ $(FS_LIBS) -lsqlite3
+
+%.o: %.c
+   $(CC) $(CFLAGS) $(INCLUDES) $(FS_INCLUDES) -c $< -o $@
+
+clean:
+   rm -f $(OBJS) $(MOD_OBJS) $(TARGET) $(MOD_TARGET)
+
+install: $(MOD_TARGET)
+   cp $(MOD_TARGET) /usr/local/freeswitch/mod/
+   cp configs/freeswitch/gateways/*.xml /usr/local/freeswitch/conf/sip_profiles/gateways/
+
+.PHONY: all clean install

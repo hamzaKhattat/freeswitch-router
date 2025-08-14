@@ -1,0 +1,8 @@
+2025-08-09 21:31:05 [INFO] [src/main.c:125] Initializing FreeSWITCH Router System v3.0
+2025-08-09 21:31:05 [INFO] [src/main.c:126] Call Flow: S1 → S2 (Router) → S3 → S2 → S4
+2025-08-09 21:31:05 [INFO] [src/core/config.c:159] Configuration loaded successfully
+Starting FreeSWITCH Router v3.0...
+Call Flow: S1 → S2 → S3 → S2 → S4
+FreeSWITCH Router CLI v3.0
+Type 'help' for available commands
+fs-router> 

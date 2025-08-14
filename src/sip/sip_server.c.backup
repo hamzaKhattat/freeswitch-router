@@ -1,0 +1,844 @@
+// sip_server.c - FreeSWITCH ESL-based router with PostgreSQL and dynamic XML generation
+// Manages S1→S2→S3→S2→S4 call flow with UUID-based provider mapping
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <pthread.h>
+#include <time.h>
+#include <sys/stat.h>
+#include <uuid/uuid.h>
+#include <esl.h>
+#include <libpq-fe.h>
+#include <stdbool.h>
+#include "sip/sip_server.h"
+#include "router/router.h"
+#include "db/database.h"
+#include "core/logging.h"
+
+#define FS_CONF_DIR "/usr/local/freeswitch/conf"
+#define FS_PROFILES_DIR FS_CONF_DIR "/sip_profiles/external"
+#define FS_DIALPLAN_DIR FS_CONF_DIR "/dialplan/public"
+#define FS_SCRIPTS_DIR "/usr/local/freeswitch/scripts"
+#define PROVIDER_MAP_DIR "/opt/freeswitch-router/configs/providers"
+
+// Provider structure with UUID mapping
+typedef struct provider_info {
+    char uuid[64];
+    char name[128];
+    char host[128];
+    int port;
+    char auth_type[32];
+    char auth_data[512];
+    int capacity;
+    int current_calls;
+    bool active;
+    time_t last_updated;
+} provider_info_t;
+
+// DID pool entry
+typedef struct did_entry {
+    int id;
+    char did[64];
+    char country[32];
+    bool in_use;
+    char destination[64];
+    char original_ani[64];
+    char call_id[256];
+    time_t allocated_at;
+} did_entry_t;
+
+// Call state tracking
+typedef struct call_state {
+    char uuid[64];
+    char call_id[256];
+    char original_ani[64];
+    char original_dnis[64];
+    char assigned_did[64];
+    int routing_stage;
+    char source_provider[128];
+    char dest_provider[128];
+    time_t created_at;
+    struct call_state *next;
+} call_state_t;
+
+// Main SIP/FreeSWITCH server structure
+struct sip_server {
+    // FreeSWITCH ESL connection
+    esl_handle_t esl_handle;
+    int esl_connected;
+    pthread_t esl_thread;
+    pthread_mutex_t esl_mutex;
+    
+    // PostgreSQL connection
+    PGconn *db_conn;
+    pthread_mutex_t db_mutex;
+    
+    // Provider management
+    provider_info_t *providers;
+    int provider_count;
+    pthread_mutex_t provider_mutex;
+    
+    // DID pool
+    did_entry_t *did_pool;
+    int did_count;
+    pthread_mutex_t did_mutex;
+    
+    // Call tracking
+    call_state_t *active_calls;
+    pthread_mutex_t call_mutex;
+    
+    // Router reference
+    router_t *router;
+    database_t *db;
+    
+    // Statistics
+    struct {
+        uint64_t total_calls;
+        uint64_t successful_routes;
+        uint64_t failed_routes;
+        uint64_t did_allocations;
+        uint64_t did_releases;
+    } stats;
+    
+    int running;
+    pthread_t monitor_thread;
+};
+
+// Generate UUID for new providers
+static char* generate_uuid(void) {
+    uuid_t uuid;
+    char *uuid_str = malloc(37);
+    uuid_generate(uuid);
+    uuid_unparse_lower(uuid, uuid_str);
+    return uuid_str;
+}
+
+// Create provider XML file with UUID mapping
+static int create_provider_xml(provider_info_t *provider) {
+    char filepath[512];
+    char mapping_file[512];
+    FILE *fp;
+    
+    // Ensure directories exist
+    mkdir(FS_PROFILES_DIR, 0755);
+    mkdir(PROVIDER_MAP_DIR, 0755);
+    
+    // Create gateway XML file named as uuid-gateway.xml
+    snprintf(filepath, sizeof(filepath), "%s/%s-gateway.xml", FS_PROFILES_DIR, provider->uuid);
+    
+    fp = fopen(filepath, "w");
+    if (!fp) {
+        LOG_ERROR("Failed to create gateway XML: %s", filepath);
+        return -1;
+    }
+    
+    fprintf(fp, "<include>\n");
+    fprintf(fp, "  <gateway name=\"%s\">\n", provider->uuid);
+    fprintf(fp, "    <!-- Provider: %s -->\n", provider->name);
+    fprintf(fp, "    <!-- UUID: %s -->\n", provider->uuid);
+    fprintf(fp, "    <param name=\"realm\" value=\"%s\"/>\n", provider->host);
+    fprintf(fp, "    <param name=\"from-domain\" value=\"%s\"/>\n", provider->host);
+    fprintf(fp, "    <param name=\"proxy\" value=\"%s:%d\"/>\n", provider->host, provider->port);
+    fprintf(fp, "    <param name=\"expire-seconds\" value=\"600\"/>\n");
+    fprintf(fp, "    <param name=\"register\" value=\"false\"/>\n");
+    fprintf(fp, "    <param name=\"retry-seconds\" value=\"30\"/>\n");
+    fprintf(fp, "    <param name=\"ping\" value=\"30\"/>\n");
+    fprintf(fp, "    <param name=\"context\" value=\"router\"/>\n");
+    fprintf(fp, "    <param name=\"caller-id-in-from\" value=\"true\"/>\n");
+    
+    // Add authentication based on type
+    if (strcmp(provider->auth_type, "ip") == 0) {
+        fprintf(fp, "    <!-- IP Authentication: %s -->\n", provider->auth_data);
+    } else if (strcmp(provider->auth_type, "userpass") == 0) {
+        char username[128], password[128];
+        if (sscanf(provider->auth_data, "%127[^:]:%127s", username, password) == 2) {
+            fprintf(fp, "    <param name=\"username\" value=\"%s\"/>\n", username);
+            fprintf(fp, "    <param name=\"password\" value=\"%s\"/>\n", password);
+            fprintf(fp, "    <param name=\"register\" value=\"true\"/>\n");
+        }
+    }
+    
+    fprintf(fp, "    <variables>\n");
+    fprintf(fp, "      <variable name=\"provider_uuid\" value=\"%s\"/>\n", provider->uuid);
+    fprintf(fp, "      <variable name=\"provider_name\" value=\"%s\"/>\n", provider->name);
+    fprintf(fp, "    </variables>\n");
+    fprintf(fp, "  </gateway>\n");
+    fprintf(fp, "</include>\n");
+    
+    fclose(fp);
+    
+    // Create provider mapping JSON file
+    snprintf(mapping_file, sizeof(mapping_file), "%s/%s.json", PROVIDER_MAP_DIR, provider->uuid);
+    
+    fp = fopen(mapping_file, "w");
+    if (fp) {
+        fprintf(fp, "{\n");
+        fprintf(fp, "  \"uuid\": \"%s\",\n", provider->uuid);
+        fprintf(fp, "  \"name\": \"%s\",\n", provider->name);
+        fprintf(fp, "  \"host\": \"%s\",\n", provider->host);
+        fprintf(fp, "  \"port\": %d,\n", provider->port);
+        fprintf(fp, "  \"auth_type\": \"%s\",\n", provider->auth_type);
+        fprintf(fp, "  \"auth_data\": \"%s\",\n", provider->auth_data);
+        fprintf(fp, "  \"xml_file\": \"%s\",\n", filepath);
+        fprintf(fp, "  \"active\": %s\n", provider->active ? "true" : "false");
+        fprintf(fp, "}\n");
+        fclose(fp);
+    }
+    
+    LOG_INFO("Created provider XML: %s -> %s", provider->name, filepath);
+    return 0;
+}
+
+// Create ACL XML for IP authentication
+static int create_provider_acl(provider_info_t *provider) {
+    if (strcmp(provider->auth_type, "ip") != 0) return 0;
+    
+    char filepath[512];
+    FILE *fp;
+    
+    snprintf(filepath, sizeof(filepath), "%s/autoload_configs/%s-acl.xml", 
+             FS_CONF_DIR, provider->uuid);
+    
+    fp = fopen(filepath, "w");
+    if (!fp) {
+        LOG_ERROR("Failed to create ACL XML: %s", filepath);
+        return -1;
+    }
+    
+    fprintf(fp, "<include>\n");
+    fprintf(fp, "  <list name=\"%s\" default=\"deny\">\n", provider->uuid);
+    
+    // Parse comma-separated IP list
+    char *ip_copy = strdup(provider->auth_data);
+    char *ip = strtok(ip_copy, ",");
+    
+    while (ip) {
+        // Trim whitespace
+        while (*ip == ' ') ip++;
+        char *end = ip + strlen(ip) - 1;
+        while (end > ip && *end == ' ') *end-- = '\0';
+        
+        fprintf(fp, "    <node type=\"allow\" cidr=\"%s/32\"/>\n", ip);
+        ip = strtok(NULL, ",");
+    }
+    
+    free(ip_copy);
+    
+    fprintf(fp, "  </list>\n");
+    fprintf(fp, "</include>\n");
+    
+    fclose(fp);
+    
+    LOG_INFO("Created ACL for provider %s: %s", provider->name, filepath);
+    return 0;
+}
+
+// Load providers from PostgreSQL
+static int load_providers_from_db(sip_server_t *server) {
+    const char *query = 
+        "SELECT id, uuid, name, host, port, auth_type, auth_data, capacity, active "
+        "FROM providers WHERE active = true";
+    
+    pthread_mutex_lock(&server->db_mutex);
+    PGresult *res = PQexec(server->db_conn, query);
+    
+    if (PQresultStatus(res) != PGRES_TUPLES_OK) {
+        LOG_ERROR("Failed to load providers: %s", PQerrorMessage(server->db_conn));
+        PQclear(res);
+        pthread_mutex_unlock(&server->db_mutex);
+        return -1;
+    }
+    
+    int rows = PQntuples(res);
+    
+    // Reallocate provider array if needed
+    if (rows > 0) {
+        server->providers = realloc(server->providers, rows * sizeof(provider_info_t));
+        server->provider_count = rows;
+        
+        for (int i = 0; i < rows; i++) {
+            provider_info_t *provider = &server->providers[i];
+            
+            // If UUID is NULL, generate one
+            if (PQgetisnull(res, i, 1)) {
+                char *new_uuid = generate_uuid();
+                strncpy(provider->uuid, new_uuid, sizeof(provider->uuid) - 1);
+                free(new_uuid);
+                
+                // Update database with new UUID
+                char update_query[512];
+                snprintf(update_query, sizeof(update_query),
+                        "UPDATE providers SET uuid = '%s' WHERE id = %s",
+                        provider->uuid, PQgetvalue(res, i, 0));
+                PGresult *update_res = PQexec(server->db_conn, update_query);
+                PQclear(update_res);
+            } else {
+                strncpy(provider->uuid, PQgetvalue(res, i, 1), sizeof(provider->uuid) - 1);
+            }
+            
+            strncpy(provider->name, PQgetvalue(res, i, 2), sizeof(provider->name) - 1);
+            strncpy(provider->host, PQgetvalue(res, i, 3), sizeof(provider->host) - 1);
+            provider->port = atoi(PQgetvalue(res, i, 4));
+            strncpy(provider->auth_type, PQgetvalue(res, i, 5), sizeof(provider->auth_type) - 1);
+            strncpy(provider->auth_data, PQgetvalue(res, i, 6), sizeof(provider->auth_data) - 1);
+            provider->capacity = atoi(PQgetvalue(res, i, 7));
+            provider->active = PQgetvalue(res, i, 8)[0] == 't';
+            provider->current_calls = 0;
+            provider->last_updated = time(NULL);
+            
+            // Create XML files for provider
+            create_provider_xml(provider);
+            create_provider_acl(provider);
+            
+            LOG_INFO("Loaded provider: %s (%s) -> %s:%d", 
+                    provider->name, provider->uuid, provider->host, provider->port);
+        }
+    }
+    
+    PQclear(res);
+    pthread_mutex_unlock(&server->db_mutex);
+    
+    // Reload FreeSWITCH XML
+    if (server->esl_connected) {
+        esl_send_recv(&server->esl_handle, "api reloadxml\n\n");
+        esl_send_recv(&server->esl_handle, "api sofia profile external rescan\n\n");
+    }
+    
+    LOG_INFO("Loaded %d providers from database", rows);
+    return 0;
+}
+
+// Load DID pool from PostgreSQL
+static int load_did_pool_from_db(sip_server_t *server) {
+    const char *query = 
+        "SELECT id, did, country, in_use, destination, call_id "
+        "FROM dids WHERE active = true";
+    
+    pthread_mutex_lock(&server->db_mutex);
+    PGresult *res = PQexec(server->db_conn, query);
+    
+    if (PQresultStatus(res) != PGRES_TUPLES_OK) {
+        LOG_ERROR("Failed to load DIDs: %s", PQerrorMessage(server->db_conn));
+        PQclear(res);
+        pthread_mutex_unlock(&server->db_mutex);
+        return -1;
+    }
+    
+    int rows = PQntuples(res);
+    
+    if (rows > 0) {
+        server->did_pool = realloc(server->did_pool, rows * sizeof(did_entry_t));
+        server->did_count = rows;
+        
+        for (int i = 0; i < rows; i++) {
+            did_entry_t *did = &server->did_pool[i];
+            
+            did->id = atoi(PQgetvalue(res, i, 0));
+            strncpy(did->did, PQgetvalue(res, i, 1), sizeof(did->did) - 1);
+            strncpy(did->country, PQgetvalue(res, i, 2), sizeof(did->country) - 1);
+            did->in_use = PQgetvalue(res, i, 3)[0] == 't';
+            
+            if (!PQgetisnull(res, i, 4)) {
+                strncpy(did->destination, PQgetvalue(res, i, 4), sizeof(did->destination) - 1);
+            }
+            if (!PQgetisnull(res, i, 5)) {
+                strncpy(did->call_id, PQgetvalue(res, i, 5), sizeof(did->call_id) - 1);
+            }
+        }
+    }
+    
+    PQclear(res);
+    pthread_mutex_unlock(&server->db_mutex);
+    
+    LOG_INFO("Loaded %d DIDs into pool", rows);
+    return 0;
+}
+
+// Allocate DID from pool
+static did_entry_t* allocate_did(sip_server_t *server, const char *country, 
+                                 const char *original_ani, const char *original_dnis,
+                                 const char *call_id) {
+    pthread_mutex_lock(&server->did_mutex);
+    
+    did_entry_t *selected_did = NULL;
+    
+    for (int i = 0; i < server->did_count; i++) {
+        did_entry_t *did = &server->did_pool[i];
+        
+        if (!did->in_use && 
+            (country == NULL || strcmp(did->country, country) == 0)) {
+            
+            did->in_use = 1;
+            did->allocated_at = time(NULL);
+            strncpy(did->destination, original_dnis, sizeof(did->destination) - 1);
+            strncpy(did->original_ani, original_ani, sizeof(did->original_ani) - 1);
+            strncpy(did->call_id, call_id, sizeof(did->call_id) - 1);
+            
+            selected_did = did;
+            
+            // Update database
+            char query[1024];
+            snprintf(query, sizeof(query),
+                    "UPDATE dids SET in_use = true, destination = '%s', "
+                    "call_id = '%s' WHERE id = %d",
+                    original_dnis, call_id, did->id);
+            
+            pthread_mutex_lock(&server->db_mutex);
+            PGresult *res = PQexec(server->db_conn, query);
+            PQclear(res);
+            pthread_mutex_unlock(&server->db_mutex);
+            
+            server->stats.did_allocations++;
+            LOG_INFO("Allocated DID %s for call %s", did->did, call_id);
+            break;
+        }
+    }
+    
+    pthread_mutex_unlock(&server->did_mutex);
+    return selected_did;
+}
+
+// Release DID back to pool
+static void release_did(sip_server_t *server, const char *did_number) {
+    pthread_mutex_lock(&server->did_mutex);
+    
+    for (int i = 0; i < server->did_count; i++) {
+        did_entry_t *did = &server->did_pool[i];
+        
+        if (strcmp(did->did, did_number) == 0) {
+            did->in_use = 0;
+            memset(did->destination, 0, sizeof(did->destination));
+            memset(did->original_ani, 0, sizeof(did->original_ani));
+            memset(did->call_id, 0, sizeof(did->call_id));
+            did->allocated_at = 0;
+            
+            // Update database
+            char query[512];
+            snprintf(query, sizeof(query),
+                    "UPDATE dids SET in_use = false, destination = NULL, "
+                    "call_id = NULL WHERE id = %d", did->id);
+            
+            pthread_mutex_lock(&server->db_mutex);
+            PGresult *res = PQexec(server->db_conn, query);
+            PQclear(res);
+            pthread_mutex_unlock(&server->db_mutex);
+            
+            server->stats.did_releases++;
+            LOG_INFO("Released DID %s", did->did);
+            break;
+        }
+    }
+    
+    pthread_mutex_unlock(&server->did_mutex);
+}
+
+// Find provider by IP
+static provider_info_t* find_provider_by_ip(sip_server_t *server, const char *ip) {
+    pthread_mutex_lock(&server->provider_mutex);
+    
+    for (int i = 0; i < server->provider_count; i++) {
+        provider_info_t *provider = &server->providers[i];
+        
+        if (strcmp(provider->auth_type, "ip") == 0) {
+            // Check if IP is in auth_data
+            if (strstr(provider->auth_data, ip) != NULL) {
+                pthread_mutex_unlock(&server->provider_mutex);
+                return provider;
+            }
+        }
+        
+        // Also check by host
+        if (strcmp(provider->host, ip) == 0) {
+            pthread_mutex_unlock(&server->provider_mutex);
+            return provider;
+        }
+    }
+    
+    pthread_mutex_unlock(&server->provider_mutex);
+    return NULL;
+}
+
+// Find provider by name
+static provider_info_t* find_provider_by_name(sip_server_t *server, const char *name) {
+    pthread_mutex_lock(&server->provider_mutex);
+    
+    for (int i = 0; i < server->provider_count; i++) {
+        provider_info_t *provider = &server->providers[i];
+        
+        if (strcmp(provider->name, name) == 0) {
+            pthread_mutex_unlock(&server->provider_mutex);
+            return provider;
+        }
+    }
+    
+    pthread_mutex_unlock(&server->provider_mutex);
+    return NULL;
+}
+
+// ESL event handler for CHANNEL_CREATE
+static void handle_channel_create(sip_server_t *server, esl_event_t *event) {
+    const char *call_uuid = esl_event_get_header(event, "Unique-ID");
+    const char *direction = esl_event_get_header(event, "Call-Direction");
+    const char *source_ip = esl_event_get_header(event, "variable_sip_received_ip");
+    const char *ani = esl_event_get_header(event, "Caller-Caller-ID-Number");
+    const char *dnis = esl_event_get_header(event, "Caller-Destination-Number");
+    
+    if (!call_uuid || !direction) return;
+    
+    LOG_INFO("CHANNEL_CREATE: UUID=%s, Direction=%s, ANI=%s, DNIS=%s, Source=%s",
+            call_uuid, direction, ani, dnis, source_ip);
+    
+    if (strcmp(direction, "inbound") == 0 && source_ip) {
+        // Identify source provider
+        provider_info_t *source_provider = find_provider_by_ip(server, source_ip);
+        
+        if (!source_provider) {
+            LOG_WARN("Unknown source IP: %s", source_ip);
+            // Hangup unauthorized call
+            char cmd[256];
+            snprintf(cmd, sizeof(cmd), "api uuid_kill %s CALL_REJECTED", call_uuid);
+            esl_send_recv(&server->esl_handle, cmd);
+            return;
+        }
+        
+        LOG_INFO("Call from provider: %s (%s)", source_provider->name, source_provider->uuid);
+        
+        // Determine routing based on source
+        if (strstr(source_provider->name, "s1") != NULL) {
+            // S1 -> S2: Need to route to S3
+            // Allocate DID
+            did_entry_t *did = allocate_did(server, NULL, ani, dnis, call_uuid);
+            
+            if (!did) {
+                LOG_ERROR("No available DID for call %s", call_uuid);
+                char cmd[256];
+                snprintf(cmd, sizeof(cmd), "api uuid_kill %s NO_ROUTE_DESTINATION", call_uuid);
+                esl_send_recv(&server->esl_handle, cmd);
+                return;
+            }
+            
+            // Find S3 provider
+            provider_info_t *s3_provider = find_provider_by_name(server, "s3");
+            if (!s3_provider) {
+                LOG_ERROR("S3 provider not found");
+                release_did(server, did->did);
+                return;
+            }
+            
+            // Set channel variables for routing
+            char cmd[512];
+            snprintf(cmd, sizeof(cmd), 
+                    "api uuid_setvar %s sip_h_X-Original-ANI %s", call_uuid, ani);
+            esl_send_recv(&server->esl_handle, cmd);
+            
+            snprintf(cmd, sizeof(cmd), 
+                    "api uuid_setvar %s sip_h_X-Original-DNIS %s", call_uuid, dnis);
+            esl_send_recv(&server->esl_handle, cmd);
+            
+            snprintf(cmd, sizeof(cmd), 
+                    "api uuid_setvar %s sip_h_X-Assigned-DID %s", call_uuid, did->did);
+            esl_send_recv(&server->esl_handle, cmd);
+            
+            // Transfer to S3 with modified ANI (DNIS becomes ANI) and DID as destination
+            snprintf(cmd, sizeof(cmd),
+                    "api uuid_transfer %s 'set:effective_caller_id_number=%s,"
+                    "bridge:sofia/gateway/%s/%s' inline",
+                    call_uuid, dnis, s3_provider->uuid, did->did);
+            esl_send_recv(&server->esl_handle, cmd);
+            
+            LOG_INFO("Routing S1->S3: ANI=%s->%s, DNIS=%s->%s", ani, dnis, dnis, did->did);
+            
+        } else if (strstr(source_provider->name, "s3") != NULL) {
+            // S3 -> S2: Return call, need to route to S4
+            // Find DID info
+            did_entry_t *did = NULL;
+            pthread_mutex_lock(&server->did_mutex);
+            
+            for (int i = 0; i < server->did_count; i++) {
+                if (strcmp(server->did_pool[i].did, dnis) == 0) {
+                    did = &server->did_pool[i];
+                    break;
+                }
+            }
+            pthread_mutex_unlock(&server->did_mutex);
+            
+            if (!did || !did->in_use) {
+                LOG_ERROR("DID %s not found or not in use", dnis);
+                char cmd[256];
+                snprintf(cmd, sizeof(cmd), "api uuid_kill %s NO_ROUTE_DESTINATION", call_uuid);
+                esl_send_recv(&server->esl_handle, cmd);
+                return;
+            }
+            
+            // Find S4 provider
+            provider_info_t *s4_provider = find_provider_by_name(server, "s4");
+            if (!s4_provider) {
+                LOG_ERROR("S4 provider not found");
+                return;
+            }
+            
+            // Restore original ANI and DNIS, route to S4
+            char cmd[512];
+            snprintf(cmd, sizeof(cmd),
+                    "api uuid_transfer %s 'set:effective_caller_id_number=%s,"
+                    "bridge:sofia/gateway/%s/%s' inline",
+                    call_uuid, did->original_ani, s4_provider->uuid, did->destination);
+            esl_send_recv(&server->esl_handle, cmd);
+            
+            LOG_INFO("Routing S3->S4: Restored ANI=%s, DNIS=%s", 
+                    did->original_ani, did->destination);
+            
+            // Release DID
+            release_did(server, dnis);
+        }
+        
+        server->stats.total_calls++;
+    }
+}
+
+// ESL event handler thread
+static void* esl_event_thread(void *arg) {
+    sip_server_t *server = (sip_server_t*)arg;
+    
+    LOG_INFO("ESL event thread started");
+    
+    while (server->running && server->esl_connected) {
+        esl_status_t status = esl_recv_event_timed(&server->esl_handle, 1000, 1, NULL);
+        
+        if (status == ESL_SUCCESS) {
+            esl_event_t *event = server->esl_handle.last_ievent;
+            
+            if (event) {
+                const char *event_name = esl_event_get_header(event, "Event-Name");
+                
+                if (event_name) {
+                    if (strcmp(event_name, "CHANNEL_CREATE") == 0) {
+                        handle_channel_create(server, event);
+                    } else if (strcmp(event_name, "CHANNEL_HANGUP") == 0) {
+                        const char *call_uuid = esl_event_get_header(event, "Unique-ID");
+                        LOG_INFO("Call hangup: %s", call_uuid);
+                    }
+                }
+            }
+        }
+    }
+    
+    LOG_INFO("ESL event thread stopped");
+    return NULL;
+}
+
+// Monitor thread for maintenance tasks
+static void* monitor_thread_func(void *arg) {
+    sip_server_t *server = (sip_server_t*)arg;
+    
+    while (server->running) {
+        // Check database connection
+        if (PQstatus(server->db_conn) != CONNECTION_OK) {
+            LOG_WARN("Database connection lost, reconnecting...");
+            PQreset(server->db_conn);
+        }
+        
+        // Reload providers and DIDs every 60 seconds
+        load_providers_from_db(server);
+        load_did_pool_from_db(server);
+        
+        // Clean up stale DIDs (allocated > 5 minutes ago)
+        time_t now = time(NULL);
+        pthread_mutex_lock(&server->did_mutex);
+        
+        for (int i = 0; i < server->did_count; i++) {
+            did_entry_t *did = &server->did_pool[i];
+            
+            if (did->in_use && did->allocated_at > 0 && 
+                (now - did->allocated_at) > 300) {
+                LOG_WARN("Releasing stale DID: %s", did->did);
+                release_did(server, did->did);
+            }
+        }
+        
+        pthread_mutex_unlock(&server->did_mutex);
+        
+        sleep(60);
+    }
+    
+    return NULL;
+}
+
+// Create routing dialplan
+static int create_routing_dialplan(sip_server_t *server) {
+    char filepath[512];
+    FILE *fp;
+    
+    snprintf(filepath, sizeof(filepath), "%s/dialplan/router.xml", FS_CONF_DIR);
+    
+    fp = fopen(filepath, "w");
+    if (!fp) {
+        LOG_ERROR("Failed to create router dialplan: %s", filepath);
+        return -1;
+    }
+    
+    fprintf(fp, "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n");
+    fprintf(fp, "<include>\n");
+    fprintf(fp, "  <context name=\"router\">\n");
+    fprintf(fp, "    <!-- Dynamic routing context managed by ESL -->\n");
+    fprintf(fp, "    <extension name=\"esl_routing\">\n");
+    fprintf(fp, "      <condition field=\"destination_number\" expression=\"^(.+)$\">\n");
+    fprintf(fp, "        <action application=\"park\"/>\n");
+    fprintf(fp, "      </condition>\n");
+    fprintf(fp, "    </extension>\n");
+    fprintf(fp, "  </context>\n");
+    fprintf(fp, "</include>\n");
+    
+    fclose(fp);
+    
+    LOG_INFO("Created routing dialplan: %s", filepath);
+    return 0;
+}
+
+// Public functions
+sip_server_t* sip_server_create(router_t *router, database_t *db) {
+    sip_server_t *server = calloc(1, sizeof(sip_server_t));
+    if (!server) return NULL;
+    
+    server->router = router;
+    server->db = db;
+    
+    // Initialize mutexes
+    pthread_mutex_init(&server->esl_mutex, NULL);
+    pthread_mutex_init(&server->db_mutex, NULL);
+    pthread_mutex_init(&server->provider_mutex, NULL);
+    pthread_mutex_init(&server->did_mutex, NULL);
+    pthread_mutex_init(&server->call_mutex, NULL);
+    
+    // Connect to PostgreSQL
+    const char *conninfo = getenv("ROUTER_DB_CONNECTION");
+    if (!conninfo) {
+        conninfo = "host=localhost dbname=router_db user=router password=router123";
+    }
+    
+    server->db_conn = PQconnectdb(conninfo);
+    if (PQstatus(server->db_conn) != CONNECTION_OK) {
+        LOG_ERROR("Failed to connect to PostgreSQL: %s", PQerrorMessage(server->db_conn));
+        free(server);
+        return NULL;
+    }
+    
+    LOG_INFO("Connected to PostgreSQL database");
+    
+    // Connect to FreeSWITCH ESL
+    esl_global_set_default_logger(ESL_LOG_LEVEL_WARNING);
+    
+    if (esl_connect(&server->esl_handle, "127.0.0.1", 8021, NULL, "ClueCon") != ESL_SUCCESS) {
+        LOG_ERROR("Failed to connect to FreeSWITCH ESL");
+        PQfinish(server->db_conn);
+        free(server);
+        return NULL;
+    }
+    
+    server->esl_connected = 1;
+    LOG_INFO("Connected to FreeSWITCH ESL");
+    
+    // Subscribe to events
+    esl_events(&server->esl_handle, ESL_EVENT_TYPE_PLAIN, 
+              "CHANNEL_CREATE CHANNEL_ANSWER CHANNEL_HANGUP CUSTOM");
+    
+    // Load configuration from database
+    load_providers_from_db(server);
+    load_did_pool_from_db(server);
+    
+    // Create routing dialplan
+    create_routing_dialplan(server);
+    
+    // Reload FreeSWITCH configuration
+    esl_send_recv(&server->esl_handle, "api reloadxml\n\n");
+    
+    LOG_INFO("FreeSWITCH ESL router created");
+    return server;
+}
+
+void sip_server_destroy(sip_server_t *server) {
+    if (!server) return;
+    
+    sip_server_stop(server);
+    
+    // Disconnect ESL
+    if (server->esl_connected) {
+        esl_disconnect(&server->esl_handle);
+    }
+    
+    // Close database connection
+    if (server->db_conn) {
+        PQfinish(server->db_conn);
+    }
+    
+    // Free provider array
+    if (server->providers) {
+        free(server->providers);
+    }
+    
+    // Free DID pool
+    if (server->did_pool) {
+        free(server->did_pool);
+    }
+    
+    // Clean up call states
+    call_state_t *call = server->active_calls;
+    while (call) {
+        call_state_t *next = call->next;
+        free(call);
+        call = next;
+    }
+    
+    // Destroy mutexes
+    pthread_mutex_destroy(&server->esl_mutex);
+    pthread_mutex_destroy(&server->db_mutex);
+    pthread_mutex_destroy(&server->provider_mutex);
+    pthread_mutex_destroy(&server->did_mutex);
+    pthread_mutex_destroy(&server->call_mutex);
+    
+    free(server);
+}
+
+int sip_server_start(sip_server_t *server) {
+    if (!server) return -1;
+    
+    server->running = 1;
+    
+    // Start ESL event thread
+    if (pthread_create(&server->esl_thread, NULL, esl_event_thread, server) != 0) {
+        LOG_ERROR("Failed to create ESL event thread");
+        return -1;
+    }
+    
+    // Start monitor thread
+    if (pthread_create(&server->monitor_thread, NULL, monitor_thread_func, server) != 0) {
+        LOG_ERROR("Failed to create monitor thread");
+        return -1;
+    }
+    
+    LOG_INFO("FreeSWITCH ESL router started");
+    return 0;
+}
+
+void sip_server_stop(sip_server_t *server) {
+    if (!server) return;
+    
+    server->running = 0;
+    
+    // Wait for threads
+    pthread_join(server->esl_thread, NULL);
+    pthread_join(server->monitor_thread, NULL);
+    
+    LOG_INFO("FreeSWITCH ESL router stopped");
+}
+
+void sip_server_get_stats(sip_server_t *server, sip_stats_t *stats) {
+    if (!server || !stats) return;
+    
+    stats->total_invites = server->stats.total_calls;
+    stats->forwarded_calls = server->stats.successful_routes;
+    stats->failed_calls = server->stats.failed_routes;
+    stats->active = server->running;
+}

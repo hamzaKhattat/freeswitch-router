@@ -1,0 +1,195 @@
+#!/bin/bash
+# FreeSWITCH Router Run and Test Script
+
+set -e
+
+# Color codes
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m'
+
+print_success() { echo -e "${GREEN}✓ $1${NC}"; }
+print_error() { echo -e "${RED}✗ $1${NC}"; }
+print_warning() { echo -e "${YELLOW}⚠ $1${NC}"; }
+print_info() { echo -e "${BLUE}ℹ $1${NC}"; }
+
+echo "======================================"
+echo "FreeSWITCH Router Run & Test Script"
+echo "======================================"
+
+# Kill any existing router process
+echo ""
+print_info "Stopping any existing router processes..."
+pkill -f "./router" 2>/dev/null || true
+sleep 1
+
+# Check if port 5060 is in use
+echo ""
+print_info "Checking port 5060..."
+if netstat -tuln | grep -q ':5060 '; then
+    print_warning "Port 5060 is in use!"
+    echo "Current process using port 5060:"
+    lsof -i :5060 2>/dev/null || netstat -tulpn | grep :5060
+    
+    echo ""
+    echo "Do you want to kill the process using port 5060? (y/n)"
+    read -r response
+    if [[ "$response" == "y" ]]; then
+        fuser -k 5060/udp 2>/dev/null || true
+        sleep 2
+        print_success "Killed process on port 5060"
+    fi
+fi
+
+# Set environment variables
+export ROUTER_DB_CONNECTION="host=localhost dbname=router_db user=router password=router123"
+export PGPASSWORD='router123'
+
+# Test database connection
+echo ""
+print_info "Testing database connection..."
+if psql -h localhost -U router -d router_db -c "SELECT 1;" > /dev/null 2>&1; then
+    print_success "Database connection OK"
+else
+    print_error "Database connection failed!"
+    echo "Trying to fix database..."
+    
+    # Try to create database
+    sudo -u postgres psql <<EOF 2>/dev/null || true
+CREATE USER router WITH PASSWORD 'router123';
+CREATE DATABASE router_db OWNER router;
+GRANT ALL PRIVILEGES ON DATABASE router_db TO router;
+EOF
+    
+    # Load schema
+    if [ -f "scripts/schema_pg.sql" ]; then
+        psql -h localhost -U router -d router_db -f scripts/schema_pg.sql 2>/dev/null || true
+    fi
+fi
+
+# Rebuild if needed
+if [ ! -f "./router" ]; then
+    print_info "Router binary not found, building..."
+    make clean
+    make DB_BACKEND=postgresql
+fi
+
+# Create necessary directories
+mkdir -p logs
+mkdir -p /tmp/freeswitch-router
+
+# Start router in background with logging
+echo ""
+print_info "Starting router in background..."
+nohup ./router > logs/router.log 2>&1 &
+ROUTER_PID=$!
+
+sleep 3
+
+# Check if router is running
+if ps -p $ROUTER_PID > /dev/null; then
+    print_success "Router started with PID $ROUTER_PID"
+else
+    print_error "Router failed to start!"
+    echo "Last 20 lines of log:"
+    tail -20 logs/router.log
+    exit 1
+fi
+
+# Wait for SIP server to be ready
+echo ""
+print_info "Waiting for SIP server to be ready..."
+for i in {1..10}; do
+    if netstat -tuln | grep -q ':5060 '; then
+        print_success "SIP server is listening on port 5060"
+        break
+    fi
+    sleep 1
+done
+
+# Show current status
+echo ""
+echo "======================================"
+echo "Current System Status"
+echo "======================================"
+
+# Database status
+echo ""
+print_info "Database Status:"
+PROVIDERS=$(psql -h localhost -U router -d router_db -t -c "SELECT COUNT(*) FROM providers WHERE active = true;" 2>/dev/null || echo 0)
+DIDS=$(psql -h localhost -U router -d router_db -t -c "SELECT COUNT(*) FROM dids WHERE active = true;" 2>/dev/null || echo 0)
+ROUTES=$(psql -h localhost -U router -d router_db -t -c "SELECT COUNT(*) FROM routes WHERE active = true;" 2>/dev/null || echo 0)
+
+echo "  Active Providers: $PROVIDERS"
+echo "  Active DIDs: $DIDS"
+echo "  Active Routes: $ROUTES"
+
+# Network status
+echo ""
+print_info "Network Status:"
+netstat -tuln | grep 5060 || echo "  SIP port 5060 not listening"
+netstat -tuln | grep 8083 || echo "  HTTP port 8083 not listening"
+
+# Test SIP with netcat
+echo ""
+print_info "Testing SIP server with OPTIONS..."
+
+# Create SIP OPTIONS message
+cat > /tmp/sip_options.txt << 'EOF'
+OPTIONS sip:router@10.0.0.2:5060 SIP/2.0
+Via: SIP/2.0/UDP 10.0.0.1:5060
+From: <sip:test@10.0.0.1>
+To: <sip:router@10.0.0.2>
+Call-ID: test123@10.0.0.1
+CSeq: 1 OPTIONS
+Content-Length: 0
+
+EOF
+
+# Send OPTIONS request
+timeout 2 nc -u -w1 localhost 5060 < /tmp/sip_options.txt > /tmp/sip_response.txt 2>&1 || true
+
+if grep -q "200 OK" /tmp/sip_response.txt 2>/dev/null; then
+    print_success "SIP server responded to OPTIONS"
+else
+    print_warning "SIP server did not respond to OPTIONS"
+fi
+
+# Test CLI commands
+echo ""
+print_info "Testing CLI commands..."
+
+echo "  Provider list:"
+./router provider list 2>/dev/null | head -5 || print_error "Failed to list providers"
+
+echo ""
+echo "  Route list:"
+./router route list 2>/dev/null | head -5 || print_error "Failed to list routes"
+
+# Monitor logs
+echo ""
+echo "======================================"
+echo "Router is running!"
+echo "======================================"
+echo ""
+echo "Commands:"
+echo "  View logs:        tail -f logs/router.log"
+echo "  Stop router:      kill $ROUTER_PID"
+echo "  Test SIP:         sipsak -s sip:test@localhost"
+echo "  Monitor traffic:  tcpdump -i any -s 0 -A port 5060"
+echo ""
+echo "CLI Commands:"
+echo "  ./router provider list"
+echo "  ./router route list"
+echo "  ./router did list"
+echo ""
+echo "Test call from S1:"
+echo "  sipsak -s sip:18005551234@10.0.0.2 -f 10.0.0.1"
+echo ""
+
+# Optionally tail logs
+echo "Press Enter to tail logs, or Ctrl+C to exit..."
+read -r
+tail -f logs/router.log

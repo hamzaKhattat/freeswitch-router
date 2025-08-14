@@ -1,0 +1,11 @@
+<!-- Gateway configuration for FS1 -->
+<gateway name="FS1">
+ <param name="realm" value="10.0.0.1"/>
+ <param name="proxy" value="10.0.0.1"/>
+ <param name="register" value="false"/>
+ <param name="caller-id-in-from" value="true"/>
+ <param name="ping" value="30"/>
+ <param name="retry-seconds" value="30"/>
+ <param name="expire-seconds" value="3600"/>
+ <param name="register-transport" value="udp"/>
+</gateway>

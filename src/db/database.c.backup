@@ -1,0 +1,520 @@
+// database.c - PostgreSQL-only implementation
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <pthread.h>
+#include <libpq-fe.h>
+#include "db/database.h"
+#include "core/logging.h"
+
+struct database {
+    PGconn *conn;
+    pthread_mutex_t mutex;
+    char *connection_string;
+};
+
+// Global database instance
+static database_t *g_database = NULL;
+
+// Helper to convert PostgreSQL result to internal format
+static db_result_t* pg_to_db_result(PGresult *pg_res) {
+    if (!pg_res) return NULL;
+    
+    int num_rows = PQntuples(pg_res);
+    int num_cols = PQnfields(pg_res);
+    
+    if (num_rows == 0 || num_cols == 0) {
+        PQclear(pg_res);
+        return NULL;
+    }
+    
+    db_result_t *result = calloc(1, sizeof(db_result_t));
+    if (!result) {
+        PQclear(pg_res);
+        return NULL;
+    }
+    
+    result->num_rows = num_rows;
+    result->num_cols = num_cols;
+    result->data = calloc(num_rows * num_cols, sizeof(char*));
+    result->columns = calloc(num_cols, sizeof(char*));
+    
+    // Copy column names
+    for (int col = 0; col < num_cols; col++) {
+        result->columns[col] = strdup(PQfname(pg_res, col));
+    }
+    
+    // Copy data
+    for (int row = 0; row < num_rows; row++) {
+        for (int col = 0; col < num_cols; col++) {
+            int idx = row * num_cols + col;
+            if (PQgetisnull(pg_res, row, col)) {
+                result->data[idx] = strdup("");
+            } else {
+                result->data[idx] = strdup(PQgetvalue(pg_res, row, col));
+            }
+        }
+    }
+    
+    PQclear(pg_res);
+    return result;
+}
+
+database_t* db_init(const char *connection_string) {
+    if (g_database) return g_database;
+    
+    database_t *db = calloc(1, sizeof(database_t));
+    if (!db) return NULL;
+    
+    // Use environment variable or provided connection string
+    const char *conn_str = connection_string;
+    if (!conn_str || strlen(conn_str) == 0) {
+        conn_str = getenv("ROUTER_DB_CONNECTION");
+        if (!conn_str) {
+            // Default PostgreSQL connection
+            conn_str = "host=localhost dbname=router_db user=router password=router123 port=5432";
+        }
+    }
+    
+    LOG_INFO("Connecting to PostgreSQL: %s", conn_str);
+    
+    db->connection_string = strdup(conn_str);
+    db->conn = PQconnectdb(conn_str);
+    
+    if (PQstatus(db->conn) != CONNECTION_OK) {
+        LOG_ERROR("Failed to connect to PostgreSQL: %s", PQerrorMessage(db->conn));
+        PQfinish(db->conn);
+        free(db->connection_string);
+        free(db);
+        return NULL;
+    }
+    
+    pthread_mutex_init(&db->mutex, NULL);
+    
+    // Set client encoding
+    PQsetClientEncoding(db->conn, "UTF8");
+    
+    // Create tables if they don't exist
+    const char *check_sql = "SELECT 1 FROM information_schema.tables WHERE table_name = 'providers'";
+    PGresult *res = PQexec(db->conn, check_sql);
+    
+    if (PQntuples(res) == 0) {
+        PQclear(res);
+        LOG_INFO("Creating database schema...");
+        
+        // Load and execute schema
+        FILE *fp = fopen("scripts/schema_pg.sql", "r");
+        if (!fp) {
+            // Create inline if file not found
+            const char *create_tables[] = {
+                "CREATE TABLE IF NOT EXISTS providers ("
+                "  id SERIAL PRIMARY KEY,"
+                "  uuid VARCHAR(64) UNIQUE,"
+                "  name VARCHAR(256) UNIQUE NOT NULL,"
+                "  host VARCHAR(256) NOT NULL,"
+                "  port INTEGER DEFAULT 5060,"
+                "  auth_type VARCHAR(32),"
+                "  auth_data TEXT,"
+                "  transport VARCHAR(16) DEFAULT 'udp',"
+                "  capacity INTEGER DEFAULT 100,"
+                "  role VARCHAR(32) DEFAULT 'general',"
+                "  active BOOLEAN DEFAULT true,"
+                "  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP"
+                ")",
+                
+                "CREATE TABLE IF NOT EXISTS routes ("
+                "  id SERIAL PRIMARY KEY,"
+                "  name VARCHAR(256),"
+                "  pattern VARCHAR(256) NOT NULL,"
+                "  provider_id INTEGER REFERENCES providers(id),"
+                "  inbound_provider VARCHAR(256),"
+                "  intermediate_provider VARCHAR(256),"
+                "  final_provider VARCHAR(256),"
+                "  priority INTEGER DEFAULT 100,"
+                "  active BOOLEAN DEFAULT true,"
+                "  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP"
+                ")",
+                
+                "CREATE TABLE IF NOT EXISTS dids ("
+                "  id SERIAL PRIMARY KEY,"
+                "  did VARCHAR(64) UNIQUE NOT NULL,"
+                "  country VARCHAR(32),"
+                "  provider_id INTEGER REFERENCES providers(id),"
+                "  in_use BOOLEAN DEFAULT false,"
+                "  destination VARCHAR(64),"
+                "  call_id VARCHAR(256),"
+                "  active BOOLEAN DEFAULT true,"
+                "  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP"
+                ")",
+                
+                "CREATE TABLE IF NOT EXISTS calls ("
+                "  id SERIAL PRIMARY KEY,"
+                "  uuid VARCHAR(256),"
+                "  ani VARCHAR(64),"
+                "  dnis VARCHAR(64),"
+                "  provider VARCHAR(256),"
+                "  route_id INTEGER,"
+                "  status VARCHAR(50) DEFAULT 'active',"
+                "  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,"
+                "  answered_at TIMESTAMP,"
+                "  ended_at TIMESTAMP,"
+                "  duration INTEGER"
+                ")",
+                
+                "CREATE TABLE IF NOT EXISTS call_records ("
+                "  id SERIAL PRIMARY KEY,"
+                "  call_id VARCHAR(256),"
+                "  original_ani VARCHAR(64),"
+                "  original_dnis VARCHAR(64),"
+                "  assigned_did VARCHAR(64),"
+                "  source_server VARCHAR(64),"
+                "  status VARCHAR(32),"
+                "  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,"
+                "  ended_at TIMESTAMP"
+                ")",
+                
+                "CREATE INDEX IF NOT EXISTS idx_providers_role ON providers(role)",
+                "CREATE INDEX IF NOT EXISTS idx_providers_active ON providers(active)",
+                "CREATE INDEX IF NOT EXISTS idx_dids_in_use ON dids(in_use)",
+                "CREATE INDEX IF NOT EXISTS idx_dids_active ON dids(active)",
+                "CREATE INDEX IF NOT EXISTS idx_calls_status ON calls(status)",
+                "CREATE INDEX IF NOT EXISTS idx_calls_created ON calls(created_at)",
+                
+                NULL
+            };
+            
+            for (int i = 0; create_tables[i] != NULL; i++) {
+                res = PQexec(db->conn, create_tables[i]);
+                if (PQresultStatus(res) != PGRES_COMMAND_OK) {
+                    LOG_ERROR("Failed to create table: %s", PQerrorMessage(db->conn));
+                }
+                PQclear(res);
+            }
+            
+            LOG_INFO("Database schema created");
+        } else {
+            // Execute schema file
+            fseek(fp, 0, SEEK_END);
+            long size = ftell(fp);
+            fseek(fp, 0, SEEK_SET);
+            
+            char *schema = malloc(size + 1);
+            fread(schema, 1, size, fp);
+            schema[size] = '\0';
+            fclose(fp);
+            
+            res = PQexec(db->conn, schema);
+            if (PQresultStatus(res) != PGRES_COMMAND_OK) {
+                LOG_ERROR("Failed to create schema: %s", PQerrorMessage(db->conn));
+            }
+            PQclear(res);
+            free(schema);
+        }
+    } else {
+        PQclear(res);
+    }
+    
+    g_database = db;
+    LOG_INFO("Connected to PostgreSQL database");
+    
+    return db;
+}
+
+void db_close(database_t *db) {
+    if (!db) return;
+    
+    pthread_mutex_lock(&db->mutex);
+    
+    if (db->conn) {
+        PQfinish(db->conn);
+    }
+    
+    pthread_mutex_unlock(&db->mutex);
+    pthread_mutex_destroy(&db->mutex);
+    
+    free(db->connection_string);
+    
+    if (g_database == db) {
+        g_database = NULL;
+    }
+    
+    free(db);
+}
+
+db_result_t* db_query(database_t *db, const char *query) {
+    if (!db || !query) return NULL;
+    
+    pthread_mutex_lock(&db->mutex);
+    
+    // Check connection
+    if (PQstatus(db->conn) != CONNECTION_OK) {
+        LOG_WARN("Database connection lost, reconnecting...");
+        PQreset(db->conn);
+        
+        if (PQstatus(db->conn) != CONNECTION_OK) {
+            LOG_ERROR("Failed to reconnect to database");
+            pthread_mutex_unlock(&db->mutex);
+            return NULL;
+        }
+    }
+    
+    PGresult *res = PQexec(db->conn, query);
+    
+    if (PQresultStatus(res) != PGRES_TUPLES_OK && 
+        PQresultStatus(res) != PGRES_COMMAND_OK) {
+        LOG_ERROR("Query failed: %s", PQerrorMessage(db->conn));
+        LOG_ERROR("Query was: %s", query);
+        PQclear(res);
+        pthread_mutex_unlock(&db->mutex);
+        return NULL;
+    }
+    
+    db_result_t *result = pg_to_db_result(res);
+    
+    pthread_mutex_unlock(&db->mutex);
+    
+    return result;
+}
+
+void db_free_result(db_result_t *result) {
+    if (!result) return;
+    
+    if (result->data) {
+        for (int i = 0; i < result->num_rows * result->num_cols; i++) {
+            free(result->data[i]);
+        }
+        free(result->data);
+    }
+    
+    if (result->columns) {
+        for (int i = 0; i < result->num_cols; i++) {
+            free(result->columns[i]);
+        }
+        free(result->columns);
+    }
+    
+    free(result);
+}
+
+const char* db_get_value(db_result_t *result, int row, int col) {
+    if (!result || !result->data) return "";
+    if (row >= result->num_rows || col >= result->num_cols) return "";
+    
+    return result->data[row * result->num_cols + col];
+}
+
+// Prepared statement structure for PostgreSQL
+typedef struct {
+    database_t *db;
+    char *sql;
+    char **params;
+    int *param_lengths;
+    int *param_formats;
+    Oid *param_types;
+    int param_count;
+    int param_capacity;
+} pg_stmt_t;
+
+db_stmt_t* db_prepare(database_t *db, const char *sql) {
+    if (!db || !sql) return NULL;
+    
+    pthread_mutex_lock(&db->mutex);
+    
+    pg_stmt_t *stmt = calloc(1, sizeof(pg_stmt_t));
+    stmt->db = db;
+    stmt->sql = strdup(sql);
+    stmt->param_capacity = 10;
+    stmt->params = calloc(stmt->param_capacity, sizeof(char*));
+    stmt->param_lengths = calloc(stmt->param_capacity, sizeof(int));
+    stmt->param_formats = calloc(stmt->param_capacity, sizeof(int));
+    stmt->param_types = calloc(stmt->param_capacity, sizeof(Oid));
+    
+    pthread_mutex_unlock(&db->mutex);
+    
+    return (db_stmt_t*)stmt;
+}
+
+int db_bind_string(db_stmt_t *stmt, int index, const char *value) {
+    if (!stmt) return -1;
+    
+    pg_stmt_t *pg_stmt = (pg_stmt_t*)stmt;
+    
+    if (index > pg_stmt->param_capacity) {
+        pg_stmt->param_capacity = index + 10;
+        pg_stmt->params = realloc(pg_stmt->params, pg_stmt->param_capacity * sizeof(char*));
+        pg_stmt->param_lengths = realloc(pg_stmt->param_lengths, pg_stmt->param_capacity * sizeof(int));
+        pg_stmt->param_formats = realloc(pg_stmt->param_formats, pg_stmt->param_capacity * sizeof(int));
+        pg_stmt->param_types = realloc(pg_stmt->param_types, pg_stmt->param_capacity * sizeof(Oid));
+    }
+    
+    if (pg_stmt->params[index-1]) {
+        free(pg_stmt->params[index-1]);
+    }
+    
+    if (value) {
+        pg_stmt->params[index-1] = strdup(value);
+        pg_stmt->param_lengths[index-1] = strlen(value);
+    } else {
+        pg_stmt->params[index-1] = NULL;
+        pg_stmt->param_lengths[index-1] = 0;
+    }
+    
+    pg_stmt->param_formats[index-1] = 0; // text format
+    pg_stmt->param_types[index-1] = 0; // let server deduce type
+    
+    if (index > pg_stmt->param_count) {
+        pg_stmt->param_count = index;
+    }
+    
+    return 0;
+}
+
+int db_bind_int(db_stmt_t *stmt, int index, int value) {
+    char buffer[32];
+    snprintf(buffer, sizeof(buffer), "%d", value);
+    return db_bind_string(stmt, index, buffer);
+}
+
+// Convert ? placeholders to $1, $2, etc for PostgreSQL
+static char* convert_placeholders(const char *sql) {
+    char *result = malloc(strlen(sql) * 2); // Allocate extra space
+    char *dst = result;
+    const char *src = sql;
+    int param_num = 1;
+    
+    while (*src) {
+        if (*src == '?') {
+            dst += sprintf(dst, "$%d", param_num++);
+            src++;
+        } else {
+            *dst++ = *src++;
+        }
+    }
+    *dst = '\0';
+    
+    return result;
+}
+
+int db_execute(db_stmt_t *stmt) {
+    if (!stmt) return -1;
+    
+    pg_stmt_t *pg_stmt = (pg_stmt_t*)stmt;
+    
+    pthread_mutex_lock(&pg_stmt->db->mutex);
+    
+    // Convert SQL placeholders
+    char *pg_sql = convert_placeholders(pg_stmt->sql);
+    
+    PGresult *res = PQexecParams(pg_stmt->db->conn,
+                                 pg_sql,
+                                 pg_stmt->param_count,
+                                 pg_stmt->param_types,
+                                 (const char * const *)pg_stmt->params,
+                                 pg_stmt->param_lengths,
+                                 pg_stmt->param_formats,
+                                 0); // text result format
+    
+    free(pg_sql);
+    
+    ExecStatusType status = PQresultStatus(res);
+    int result = (status == PGRES_COMMAND_OK || status == PGRES_TUPLES_OK) ? 0 : -1;
+    
+    if (result < 0) {
+        LOG_ERROR("Execute failed: %s", PQerrorMessage(pg_stmt->db->conn));
+        LOG_ERROR("SQL was: %s", pg_stmt->sql);
+    }
+    
+    PQclear(res);
+    pthread_mutex_unlock(&pg_stmt->db->mutex);
+    
+    return result;
+}
+
+db_result_t* db_execute_query(db_stmt_t *stmt) {
+    if (!stmt) return NULL;
+    
+    pg_stmt_t *pg_stmt = (pg_stmt_t*)stmt;
+    
+    pthread_mutex_lock(&pg_stmt->db->mutex);
+    
+    // Convert SQL placeholders
+    char *pg_sql = convert_placeholders(pg_stmt->sql);
+    
+    PGresult *res = PQexecParams(pg_stmt->db->conn,
+                                 pg_sql,
+                                 pg_stmt->param_count,
+                                 pg_stmt->param_types,
+                                 (const char * const *)pg_stmt->params,
+                                 pg_stmt->param_lengths,
+                                 pg_stmt->param_formats,
+                                 0);
+    
+    free(pg_sql);
+    
+    db_result_t *result = pg_to_db_result(res);
+    
+    pthread_mutex_unlock(&pg_stmt->db->mutex);
+    
+    return result;
+}
+
+void db_finalize(db_stmt_t *stmt) {
+    if (!stmt) return;
+    
+    pg_stmt_t *pg_stmt = (pg_stmt_t*)stmt;
+    
+    free(pg_stmt->sql);
+    
+    for (int i = 0; i < pg_stmt->param_count; i++) {
+        if (pg_stmt->params[i]) {
+            free(pg_stmt->params[i]);
+        }
+    }
+    
+    free(pg_stmt->params);
+    free(pg_stmt->param_lengths);
+    free(pg_stmt->param_formats);
+    free(pg_stmt->param_types);
+    free(pg_stmt);
+}
+
+database_t* get_database(void) {
+    return g_database;
+}
+
+// Transaction support
+int db_begin_transaction(database_t *db) {
+    if (!db) return -1;
+    
+    pthread_mutex_lock(&db->mutex);
+    PGresult *res = PQexec(db->conn, "BEGIN");
+    int result = (PQresultStatus(res) == PGRES_COMMAND_OK) ? 0 : -1;
+    PQclear(res);
+    pthread_mutex_unlock(&db->mutex);
+    
+    return result;
+}
+
+int db_commit_transaction(database_t *db) {
+    if (!db) return -1;
+    
+    pthread_mutex_lock(&db->mutex);
+    PGresult *res = PQexec(db->conn, "COMMIT");
+    int result = (PQresultStatus(res) == PGRES_COMMAND_OK) ? 0 : -1;
+    PQclear(res);
+    pthread_mutex_unlock(&db->mutex);
+    
+    return result;
+}
+
+int db_rollback_transaction(database_t *db) {
+    if (!db) return -1;
+    
+    pthread_mutex_lock(&db->mutex);
+    PGresult *res = PQexec(db->conn, "ROLLBACK");
+    int result = (PQresultStatus(res) == PGRES_COMMAND_OK) ? 0 : -1;
+    PQclear(res);
+    pthread_mutex_unlock(&db->mutex);
+    
+    return result;
+}

@@ -1,0 +1,29 @@
+<!-- FreeSWITCH SIP Profile for FS2 Router -->
+<profile name="fs2-router">
+  <settings>
+    <param name="sip-ip" value="10.0.0.2"/>
+    <param name="sip-port" value="5060"/>
+    <param name="rtp-ip" value="10.0.0.2"/>
+    <param name="context" value="fs2-router"/>
+    <param name="auth-calls" value="false"/>
+    <param name="inbound-codec-prefs" value="PCMU,PCMA"/>
+    <param name="outbound-codec-prefs" value="PCMU,PCMA"/>
+    <param name="manage-presence" value="false"/>
+    <param name="nonce-ttl" value="60"/>
+    <param name="session-timeout" value="0"/>
+    <param name="minimum-session-expires" value="120"/>
+    <param name="enable-100rel" value="false"/>
+    <param name="enable-compact-headers" value="false"/>
+    <param name="enable-timer" value="false"/>
+    <param name="dtmf-type" value="rfc2833"/>
+    <param name="pass-rfc2833" value="true"/>
+    <param name="rtp-rewrite-timestamps" value="true"/>
+    <param name="record-path" value="/var/lib/freeswitch/recordings"/>
+    <param name="record-template" value="${uuid}.wav"/>
+  </settings>
+
+  <!-- Gateways are managed dynamically by router -->
+  <gateways>
+    <X-PRE-PROCESS cmd="include" data="gateways/*.xml"/>
+  </gateways>
+</profile>

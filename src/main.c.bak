@@ -1,0 +1,147 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <signal.h>
+#include <unistd.h>
+#include <pthread.h>
+
+#include "core/config.h"
+#include "core/logging.h"
+#include "core/server.h"
+#include "db/database.h"
+#include "db/cache.h"
+#include "sip/freeswitch_handler.h"
+#include "router/router.h"
+#include "cli/cli.h"
+
+// For FreeSWITCH integration
+extern int fs_init_directories(void);
+
+static volatile int running = 1;
+
+void signal_handler(int sig) {
+    printf("\nShutting down...\n");
+    (void)sig;  // Suppress unused parameter warning
+    running = 0;
+}
+
+int main(int argc, char *argv[]) {
+    app_config_t *config;
+    database_t *db;
+    cache_t *cache;
+    freeswitch_handler_t *fs_handler;
+    router_t *router;
+    server_t *server;
+    cli_t *cli;
+    
+    // Setup signal handler
+    signal(SIGINT, signal_handler);
+    signal(SIGTERM, signal_handler);
+    
+    printf("FreeSWITCH Production Call Router v3.0\n");
+    
+    // Load configuration
+    const char *config_file = "configs/production.json";
+    if (argc > 1 && strcmp(argv[1], "--config") == 0 && argc > 2) {
+        config_file = argv[2];
+    }
+    
+    printf("Configuration: %s\n", config_file);
+    
+    config = config_load(config_file);
+    if (!config) {
+        fprintf(stderr, "Failed to load configuration\n");
+        return 1;
+    }
+    
+    // Initialize logging
+    logger_init(config->log_file);
+    
+    // Initialize database with connection pooling
+    db = db_init(config->database.path);
+    if (!db) {
+        LOG_ERROR("Failed to initialize database");
+        return 1;
+    }
+    
+    LOG_INFO("Database pool created with %d connections", config->database.pool_size);
+    
+    // Initialize cache (optional)
+    cache = cache_create(config->cache.host, config->cache.port, 
+                        config->cache.pool_size);
+    if (!cache) {
+        LOG_WARN("Failed to create cache pool, continuing without cache");
+    }
+    
+    // Initialize FreeSWITCH handler with connection pooling
+    fs_handler = freeswitch_handler_create(config->freeswitch.host,
+                                          config->freeswitch.port,
+                                          config->freeswitch.password);
+    if (!fs_handler) {
+        LOG_ERROR("Failed to create FreeSWITCH handler");
+        return 1;
+    }
+    
+    LOG_INFO("Connected to FreeSWITCH successfully");
+    
+    // Initialize FreeSWITCH directories
+    fs_init_directories();
+    
+    // Create router with scaling capabilities
+    router = router_create(db, cache, fs_handler);
+    if (!router) {
+        LOG_ERROR("Failed to create router");
+        return 1;
+    }
+    
+    LOG_INFO("Router created successfully");
+    LOG_INFO("Max routes: %d, Max providers: %d", 
+             config->router.max_routes, config->router.max_providers);
+    
+    // Start HTTP server with worker threads
+    server = server_create(config->server.port, router);
+    if (!server) {
+        LOG_ERROR("Failed to create HTTP server");
+        return 1;
+    }
+    
+    if (server_start(server) < 0) {
+        LOG_ERROR("Failed to start HTTP server");
+        return 1;
+    }
+    
+    LOG_INFO("HTTP server started on %s:%d with %d worker threads", 
+             config->server.listen_address, config->server.port,
+             config->server.worker_threads);
+    LOG_INFO("System started successfully");
+    LOG_INFO("HTTP API available at http://%s:%d", 
+             config->server.listen_address, config->server.port);
+    
+    // Check if running in non-interactive mode
+    if (argc > 1 && (strcmp(argv[1], "provider") == 0 || 
+                     strcmp(argv[1], "route") == 0 || 
+                     strcmp(argv[1], "did") == 0)) {
+        // Non-interactive mode - execute command and exit
+        extern int cli_execute_command(int argc, char *argv[]);
+        cli_execute_command(argc, argv);
+    } else {
+        // Interactive mode - start CLI
+        cli = cli_create();
+        if (cli) {
+            cli_run(cli);
+            cli_destroy(cli);
+        }
+    }
+    
+    // Cleanup
+    server_stop(server);
+    server_destroy(server);
+    router_destroy(router);
+    freeswitch_handler_destroy(fs_handler);
+    if (cache) cache_destroy(cache);
+    db_close(db);
+    config_free(config);
+    logger_close();
+    
+    return 0;
+}

@@ -1,0 +1,172 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include "provider_cmd.h"
+#include "../db/database.h"
+#include "../core/logging.h"
+#include "../freeswitch/freeswitch_integration.h"
+
+int cmd_provider_add(int argc, char *argv[]) {
+    if (argc < 5) {
+        printf("Usage: provider add <name> <host:port> <capacity> [username] [password]\n");
+        return -1;
+    }
+    
+    const char *name = argv[2];
+    const char *host_port = argv[3];
+    int capacity = atoi(argv[4]);
+    const char *username = (argc > 5) ? argv[5] : NULL;
+    const char *password = (argc > 6) ? argv[6] : NULL;
+    
+    char host[256];
+    int port = 5060;
+    char *colon = strchr(host_port, ':');
+    
+    if (colon) {
+        strncpy(host, host_port, colon - host_port);
+        host[colon - host_port] = '\0';
+        port = atoi(colon + 1);
+    } else {
+        strcpy(host, host_port);
+    }
+    
+    database_t *db = get_database();
+    const char *sql = "INSERT INTO providers (name, host, port, username, password, "
+                     "transport, capacity, active) VALUES (?, ?, ?, ?, ?, 'udp', ?, 1)";
+    
+    db_stmt_t *stmt = db_prepare(db, sql);
+    if (!stmt) {
+        printf("Failed to prepare statement\n");
+        return -1;
+    }
+    
+    db_bind_string(stmt, 1, name);
+    db_bind_string(stmt, 2, host);
+    db_bind_int(stmt, 3, port);
+    db_bind_string(stmt, 4, username);
+    db_bind_string(stmt, 5, password);
+    db_bind_int(stmt, 6, capacity);
+    
+    if (db_execute(stmt) < 0) {
+        printf("Failed to add provider\n");
+        db_finalize(stmt);
+        return -1;
+    }
+    
+    db_finalize(stmt);
+    
+    // Automatically configure FreeSWITCH
+    if (fs_add_provider(name, host, port, username, password) < 0) {
+        printf("Warning: Failed to configure FreeSWITCH gateway\n");
+    }
+    
+    printf("Provider '%s' added successfully\n", name);
+    printf("FreeSWITCH gateway configured automatically\n");
+    
+    sleep(2);
+    gateway_status_t status;
+    if (fs_get_gateway_status(name, &status) == 0) {
+        printf("Gateway Status: %s\n", status.registered ? "REGISTERED" : "NOT REGISTERED");
+    }
+    
+    return 0;
+}
+
+int cmd_provider_delete(int argc, char *argv[]) {
+    if (argc < 3) {
+        printf("Usage: provider delete <name>\n");
+        return -1;
+    }
+    
+    const char *name = argv[2];
+    
+    fs_remove_provider(name);
+    
+    database_t *db = get_database();
+    const char *sql = "DELETE FROM providers WHERE name = ?";
+    
+    db_stmt_t *stmt = db_prepare(db, sql);
+    if (!stmt) {
+        printf("Failed to prepare statement\n");
+        return -1;
+    }
+    
+    db_bind_string(stmt, 1, name);
+    
+    if (db_execute(stmt) < 0) {
+        printf("Failed to delete provider\n");
+        db_finalize(stmt);
+        return -1;
+    }
+    
+    db_finalize(stmt);
+    
+    printf("Provider '%s' deleted successfully\n", name);
+    return 0;
+}
+
+int cmd_provider_list(int argc, char *argv[]) {
+    database_t *db = get_database();
+    db_result_t *result;
+    
+    const char *sql = "SELECT name, host, port, username, transport, capacity, active "
+                     "FROM providers ORDER BY name";
+    
+    result = db_query(db, sql);
+    if (!result) {
+        printf("Failed to list providers\n");
+        return -1;
+    }
+    
+    printf("\nProviders\n");
+    printf("=========\n");
+    printf("%-20s %-20s %-6s %-10s %-8s\n", 
+           "Name", "Host", "Port", "Status", "FS Status");
+    printf("%-20s %-20s %-6s %-10s %-8s\n", 
+           "----", "----", "----", "------", "---------");
+    
+    for (int i = 0; i < result->num_rows; i++) {
+        const char *name = db_get_value(result, i, 0);
+        const char *host = db_get_value(result, i, 1);
+        const char *port = db_get_value(result, i, 2);
+        int active = atoi(db_get_value(result, i, 6));
+        
+        gateway_status_t status;
+        const char *fs_status = "Unknown";
+        if (fs_get_gateway_status(name, &status) == 0) {
+            fs_status = status.registered ? "REGED" : "NOREG";
+        }
+        
+        printf("%-20s %-20s %-6s %-10s %-8s\n", 
+               name, host, port, 
+               active ? "Active" : "Inactive", fs_status);
+    }
+    
+    db_free_result(result);
+    return 0;
+}
+
+int cmd_provider_test(int argc, char *argv[]) {
+    if (argc < 3) {
+        printf("Usage: provider test <name>\n");
+        return -1;
+    }
+    
+    const char *name = argv[2];
+    
+    printf("Testing provider '%s'...\n", name);
+    
+    gateway_status_t status;
+    if (fs_get_gateway_status(name, &status) == 0) {
+        printf("Gateway Status: %s\n", status.registered ? "REGISTERED" : "NOT REGISTERED");
+        printf("Calls In: %d\n", status.calls_in);
+        printf("Calls Out: %d\n", status.calls_out);
+    }
+    
+    return 0;
+}
+
+int cmd_provider_show(int argc, char *argv[]) {
+    return cmd_provider_list(argc, argv);
+}

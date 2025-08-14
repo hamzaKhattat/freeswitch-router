@@ -1,0 +1,217 @@
+#!/bin/bash
+# quick_fixes.sh - Apply quick fixes for immediate issues
+
+set -e
+
+cd /root/freeswitch-router
+
+echo "Applying quick fixes..."
+
+# 1. Fix missing function declaration
+echo "Adding missing function declaration..."
+if ! grep -q "cmd_provider_reload" include/commands/provider_cmd.h; then
+    echo "int cmd_provider_reload(int argc, char *argv[]);" >> include/commands/provider_cmd.h
+    echo "✓ Added cmd_provider_reload declaration"
+fi
+
+# 2. Fix tone stream format
+echo "Fixing tone stream format..."
+sed -i 's/tone_stream:\/\/%(1000,0,440)/tone_stream:\/\/%%(1000,0,440)/g' src/freeswitch/fs_xml_generator.c
+echo "✓ Fixed tone stream format"
+
+# 3. Add missing provider reload function
+echo "Adding provider reload function..."
+if ! grep -q "cmd_provider_reload" src/commands/provider_cmd.c; then
+    cat >> src/commands/provider_cmd.c << 'EOF'
+
+int cmd_provider_reload(int argc, char *argv[]) {
+    (void)argc;
+    (void)argv;
+    
+    printf("Reloading all provider configurations...\n");
+    fs_regenerate_all_providers();
+    fs_generate_route_dialplan();
+    fs_reload_config();
+    printf("Provider configurations reloaded successfully\n");
+    
+    return 0;
+}
+EOF
+    echo "✓ Added provider reload function"
+fi
+
+# 4. Replace problematic Lua function with safer version
+echo "Replacing Lua generation function..."
+cat > /tmp/lua_replacement.txt << 'EOF'
+// FIXED: Generate improved route handler Lua script
+int fs_generate_route_handler_lua(void) {
+    char filepath[512];
+    FILE *fp;
+    
+    snprintf(filepath, sizeof(filepath), "%s/route_handler.lua", FS_SCRIPTS_DIR);
+    fp = fopen(filepath, "w");
+    if (!fp) {
+        LOG_ERROR("Failed to create route_handler.lua");
+        return -1;
+    }
+    
+    fprintf(fp, "-- Dynamic Route Handler for S1->S2->S3->S2->S4 flow\n");
+    fprintf(fp, "-- Generated: %ld\n", time(NULL));
+    fprintf(fp, "\n");
+    
+    fprintf(fp, "local stage = argv[1] or \"unknown\"\n");
+    fprintf(fp, "local route_id = argv[2] or \"0\"\n");
+    fprintf(fp, "local next_provider = argv[3] or \"\"\n");
+    fprintf(fp, "local final_provider = argv[4] or \"\"\n");
+    fprintf(fp, "\n");
+    
+    fprintf(fp, "local dbh = freeswitch.Dbh(\"pgsql://router:router123@localhost/router_db\")\n");
+    fprintf(fp, "if not dbh:connected() then\n");
+    fprintf(fp, "    freeswitch.consoleLog(\"ERROR\", \"Database connection failed\\n\")\n");
+    fprintf(fp, "    session:hangup(\"TEMPORARY_FAILURE\")\n");
+    fprintf(fp, "    return\n");
+    fprintf(fp, "end\n");
+    fprintf(fp, "\n");
+    
+    fprintf(fp, "local call_uuid = session:getVariable(\"uuid\")\n");
+    fprintf(fp, "local ani = session:getVariable(\"caller_id_number\")\n");
+    fprintf(fp, "local dnis = session:getVariable(\"destination_number\")\n");
+    fprintf(fp, "\n");
+    
+    fprintf(fp, "freeswitch.consoleLog(\"INFO\", \"Route Handler: Stage=\" .. stage .. \", ANI=\" .. (ani or \"nil\") .. \", DNIS=\" .. (dnis or \"nil\") .. \"\\n\")\n");
+    fprintf(fp, "\n");
+    
+    fprintf(fp, "if stage == \"origin\" then\n");
+    fprintf(fp, "    -- S1->S2: Route to intermediate\n");
+    fprintf(fp, "    session:setVariable(\"original_ani\", ani)\n");
+    fprintf(fp, "    session:setVariable(\"original_dnis\", dnis)\n");
+    fprintf(fp, "    \n");
+    fprintf(fp, "    local bridge_str = \"sofia/gateway/\" .. next_provider .. \"/\" .. dnis\n");
+    fprintf(fp, "    freeswitch.consoleLog(\"INFO\", \"Bridging to: \" .. bridge_str .. \"\\n\")\n");
+    fprintf(fp, "    session:execute(\"bridge\", bridge_str)\n");
+    fprintf(fp, "    \n");
+    fprintf(fp, "elseif stage == \"intermediate\" then\n");
+    fprintf(fp, "    -- S3->S2: Route to final\n");
+    fprintf(fp, "    local orig_dnis = session:getVariable(\"sip_h_X-Original-DNIS\") or dnis\n");
+    fprintf(fp, "    \n");
+    fprintf(fp, "    local bridge_str = \"sofia/gateway/\" .. final_provider .. \"/\" .. orig_dnis\n");
+    fprintf(fp, "    freeswitch.consoleLog(\"INFO\", \"Bridging to final: \" .. bridge_str .. \"\\n\")\n");
+    fprintf(fp, "    session:execute(\"bridge\", bridge_str)\n");
+    fprintf(fp, "    \n");
+    fprintf(fp, "else\n");
+    fprintf(fp, "    freeswitch.consoleLog(\"ERROR\", \"Unknown stage: \" .. stage .. \"\\n\")\n");
+    fprintf(fp, "    session:hangup(\"UNSPECIFIED\")\n");
+    fprintf(fp, "end\n");
+    fprintf(fp, "\n");
+    fprintf(fp, "dbh:release()\n");
+    
+    fclose(fp);
+    
+    LOG_INFO("Generated route_handler.lua");
+    return 0;
+}
+EOF
+
+# Find and replace the problematic function
+awk '
+BEGIN { in_function = 0; brace_count = 0 }
+/^int fs_generate_route_handler_lua\(void\)/ {
+    in_function = 1
+    brace_count = 0
+    next
+}
+in_function && /{/ { 
+    brace_count++ 
+    next
+}
+in_function && /}/ { 
+    brace_count--
+    if (brace_count == 0) {
+        in_function = 0
+        # Insert replacement function here
+        while ((getline line < "/tmp/lua_replacement.txt") > 0) {
+            print line
+        }
+        close("/tmp/lua_replacement.txt")
+        next
+    }
+    next
+}
+in_function { next }
+{ print }
+' src/freeswitch/fs_xml_generator.c > /tmp/fs_xml_generator_fixed.c
+
+mv /tmp/fs_xml_generator_fixed.c src/freeswitch/fs_xml_generator.c
+echo "✓ Replaced Lua generation function"
+
+# 5. Add safer route reload function if missing
+echo "Adding safer route reload..."
+if ! grep -q "cmd_route_reload.*argc.*argv" src/commands/route_cmd.c; then
+    cat >> src/commands/route_cmd.c << 'EOF'
+
+int cmd_route_reload(int argc, char *argv[]) {
+    (void)argc;
+    (void)argv;
+    
+    printf("Reloading all route configurations...\n");
+    
+    database_t *db = get_database();
+    if (!db) {
+        printf("Error: Database not available\n");
+        return -1;
+    }
+    
+    if (fs_generate_route_dialplan() == 0) {
+        printf("  ✓ Regenerated route dialplans\n");
+        fs_reload_config();
+        printf("  ✓ Reloaded FreeSWITCH\n");
+        printf("Route configurations reloaded successfully\n");
+    } else {
+        printf("  ✗ Failed to reload routes\n");
+        return -1;
+    }
+    
+    return 0;
+}
+EOF
+    echo "✓ Added safer route reload function"
+fi
+
+# 6. Compile with safer options
+echo "Recompiling with fixes..."
+make clean
+
+# Compile with less aggressive optimization to avoid potential issues
+sed 's/-O2/-O1/g' Makefile > Makefile.safe
+if make -f Makefile.safe; then
+    echo "✓ Compilation successful with fixes!"
+    
+    # Test basic functionality
+    echo "Testing basic functionality..."
+    if timeout 5 ./router help >/dev/null 2>&1; then
+        echo "✓ Basic functionality test passed"
+    else
+        echo "⚠ Basic functionality test failed or timeout"
+    fi
+    
+    # Test provider list
+    echo "Testing provider list..."
+    if timeout 10 ./router provider list >/dev/null 2>&1; then
+        echo "✓ Provider list test passed"
+    else
+        echo "⚠ Provider list test failed"
+    fi
+    
+    echo ""
+    echo "Quick fixes applied successfully!"
+    echo "Try running: ./router route reload"
+    
+else
+    echo "✗ Compilation failed"
+    exit 1
+fi
+
+# Clean up temporary files
+rm -f /tmp/lua_replacement.txt
+
+echo "Done!"

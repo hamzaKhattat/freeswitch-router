@@ -1,0 +1,143 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- FreeSWITCH Router Dialplan Configuration -->
+<include>
+  <context name="router">
+    
+    <!-- Incoming calls from S1 providers -->
+    <extension name="route_incoming_s1">
+      <condition field="network_addr" expression="^10\.0\.0\.1$|^10\.0\.0\.2$">
+        <action application="set" data="call_id=${create_uuid()}"/>
+        <action application="set" data="inbound_provider=${sip_from_host}"/>
+        <action application="log" data="INFO Incoming call from S1: ANI=${caller_id_number} DNIS=${destination_number}"/>
+        
+        <!-- Call router API to get routing instructions -->
+        <action application="curl_json" data="{
+          url: 'http://localhost:8081/api/v1/process/incoming',
+          method: 'POST',
+          timeout: 5000,
+          connect-timeout: 2000,
+          headers: {'Content-Type': 'application/json'},
+          json: {
+            'call_id': '${call_id}',
+            'ani': '${caller_id_number}',
+            'dnis': '${destination_number}',
+            'provider': '${inbound_provider}'
+          }
+        }"/>
+        
+        <!-- Check if routing was successful -->
+        <action application="set" data="router_status=${curl_response_data(status)}"/>
+        <action application="set" data="did_assigned=${curl_response_data(did_assigned)}"/>
+        <action application="set" data="next_hop=${curl_response_data(next_hop)}"/>
+        <action application="set" data="ani_to_send=${curl_response_data(ani_to_send)}"/>
+        <action application="set" data="dnis_to_send=${curl_response_data(dnis_to_send)}"/>
+        
+        <!-- Route the call if successful -->
+        <action application="execute_extension" data="route_to_s3"/>
+      </condition>
+    </extension>
+    
+    <!-- Route to S3 (Intermediate) -->
+    <extension name="route_to_s3">
+      <condition field="${router_status}" expression="^success$">
+        <!-- Set call variables for S3 -->
+        <action application="set" data="effective_caller_id_number=${ani_to_send}"/>
+        <action application="set" data="effective_caller_id_name=${ani_to_send}"/>
+        <action application="set" data="sip_h_X-Original-ANI=${caller_id_number}"/>
+        <action application="set" data="sip_h_X-Original-DNIS=${destination_number}"/>
+        <action application="set" data="sip_h_X-Call-ID=${call_id}"/>
+        <action application="set" data="sip_h_X-DID-Assigned=${did_assigned}"/>
+        
+        <!-- Bridge to S3 -->
+        <action application="bridge" data="sofia/external/${dnis_to_send}@${next_hop}"/>
+        
+        <!-- Handle hangup -->
+        <action application="curl_json" data="{
+          url: 'http://localhost:8081/api/v1/process/hangup',
+          method: 'POST',
+          timeout: 1000,
+          json: {'call_id': '${call_id}'}
+        }"/>
+      </condition>
+      
+      <condition field="${router_status}" expression="^(?!success).*$">
+        <action application="log" data="ERR Routing failed: ${curl_response_data(error)}"/>
+        <action application="respond" data="503 Service Unavailable"/>
+      </condition>
+    </extension>
+    
+    <!-- Return calls from S3 providers -->
+    <extension name="route_return_s3">
+      <condition field="network_addr" expression="^10\.0\.0\.3$">
+        <action application="set" data="return_provider=${sip_from_host}"/>
+        <action application="set" data="source_ip=${network_addr}"/>
+        <action application="log" data="INFO Return call from S3: ANI2=${caller_id_number} DID=${destination_number}"/>
+        
+        <!-- Call router API for return call processing -->
+        <action application="curl_json" data="{
+          url: 'http://localhost:8081/api/v1/process/return',
+          method: 'POST',
+          timeout: 5000,
+          connect-timeout: 2000,
+          headers: {'Content-Type': 'application/json'},
+          json: {
+            'ani2': '${caller_id_number}',
+            'did': '${destination_number}',
+            'provider': '${return_provider}',
+            'source_ip': '${source_ip}'
+          }
+        }"/>
+        
+        <!-- Get routing response -->
+        <action application="set" data="router_status=${curl_response_data(status)}"/>
+        <action application="set" data="next_hop=${curl_response_data(next_hop)}"/>
+        <action application="set" data="ani_to_send=${curl_response_data(ani_to_send)}"/>
+        <action application="set" data="dnis_to_send=${curl_response_data(dnis_to_send)}"/>
+        
+        <!-- Route to S4 if successful -->
+        <action application="execute_extension" data="route_to_s4"/>
+      </condition>
+    </extension>
+    
+    <!-- Route to S4 (Final) -->
+    <extension name="route_to_s4">
+      <condition field="${router_status}" expression="^success$">
+        <!-- Set call variables for S4 -->
+        <action application="set" data="effective_caller_id_number=${ani_to_send}"/>
+        <action application="set" data="effective_caller_id_name=${ani_to_send}"/>
+        <action application="set" data="sip_h_X-Call-ID=${sip_h_X-Call-ID}"/>
+        
+        <!-- Notify router of final routing -->
+        <action application="curl_json" data="{
+          url: 'http://localhost:8081/api/v1/process/final',
+          method: 'POST',
+          timeout: 1000,
+          json: {
+            'call_id': '${sip_h_X-Call-ID}',
+            'ani': '${ani_to_send}',
+            'dnis': '${dnis_to_send}',
+            'provider': 'provider-s4',
+            'source_ip': '${local_ip_v4}'
+          }
+        }"/>
+        
+        <!-- Bridge to S4 -->
+        <action application="bridge" data="sofia/external/${dnis_to_send}@${next_hop}"/>
+      </condition>
+      
+      <condition field="${router_status}" expression="^(?!success).*$">
+        <action application="log" data="ERR Return call validation failed: ${curl_response_data(error)}"/>
+        <action application="respond" data="403 Forbidden"/>
+      </condition>
+    </extension>
+    
+    <!-- Catch all - reject unknown calls -->
+    <extension name="reject_unknown">
+      <condition field="destination_number" expression="^.*$">
+        <action application="log" data="WARN Rejecting unknown call from ${network_addr}"/>
+        <action application="respond" data="403 Forbidden"/>
+      </condition>
+    </extension>
+    
+  </context>
+</include>

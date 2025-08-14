@@ -1,0 +1,113 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <pthread.h>
+#include <time.h>
+#include <unistd.h>
+#include "router/router.h"
+#include "core/logging.h"
+
+typedef enum {
+    ROUTE_TYPE_INBOUND,
+    ROUTE_TYPE_INTERMEDIATE,
+    ROUTE_TYPE_FINAL
+} route_type_t;
+
+typedef struct call_state {
+    char call_id[256];
+    char ani[64];
+    char dnis[64];
+    char current_provider[128];
+    route_type_t current_stage;
+    char route_name[128];
+    time_t created_at;
+    struct call_state *next;
+} call_state_t;
+
+struct router {
+    database_t *db;
+    pthread_mutex_t mutex;
+    call_state_t *active_calls;
+    
+    struct {
+        uint64_t total_calls;
+        uint64_t successful_calls;
+        uint64_t failed_calls;
+    } stats;
+};
+
+router_t* router_create(database_t *db, void *cache, void *fs_handler) {
+    router_t *router = calloc(1, sizeof(router_t));
+    if (!router) return NULL;
+    
+    router->db = db;
+    pthread_mutex_init(&router->mutex, NULL);
+    
+    LOG_INFO("Router created successfully");
+    
+    return router;
+}
+
+void router_destroy(router_t *router) {
+    if (!router) return;
+    
+    pthread_mutex_lock(&router->mutex);
+    
+    // Free active calls
+    call_state_t *call = router->active_calls;
+    while (call) {
+        call_state_t *next = call->next;
+        free(call);
+        call = next;
+    }
+    
+    pthread_mutex_unlock(&router->mutex);
+    pthread_mutex_destroy(&router->mutex);
+    free(router);
+}
+
+int router_route_call(router_t *router, route_request_t *request) {
+    if (!router || !request || !request->dnis) return -1;
+    
+    LOG_INFO("Routing request: ANI=%s, DNIS=%s, Provider=%s", 
+             request->ani, request->dnis, request->provider);
+    
+// Fix for router.c - line 75-83
+    char sql[1024];
+    snprintf(sql, sizeof(sql),
+        "SELECT COALESCE(p.name, r.intermediate_provider) as provider_name "
+        "FROM routes r "
+        "LEFT JOIN providers p ON r.provider_id = p.id "
+        "WHERE '%s' GLOB r.pattern AND r.active = 1 "
+        "ORDER BY r.priority DESC LIMIT 1",
+        request->dnis);
+    
+    db_result_t *result = db_query(router->db, sql);
+    
+    if (result && result->num_rows > 0) {
+        const char *provider = db_get_value(result, 0, 0);
+        request->gateway = strdup(provider);
+        request->route_type = strdup("standard");
+        
+        LOG_INFO("Route found: %s -> gateway %s", request->dnis, provider);
+        
+        db_free_result(result);
+        
+        router->stats.total_calls++;
+        return 0;
+    }
+    
+    if (result) db_free_result(result);
+    
+    LOG_WARN("No route found for %s", request->dnis);
+    router->stats.failed_calls++;
+    return -1;
+}
+
+int router_get_stats(router_t *router, void *stats) {
+    if (!router || !stats) return -1;
+    
+    memcpy(stats, &router->stats, sizeof(router->stats));
+    
+    return 0;
+}

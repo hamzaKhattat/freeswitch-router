@@ -1,0 +1,15 @@
+[Unit]
+Description=FreeSWITCH Router Service
+After=network.target freeswitch.service
+
+[Service]
+Type=simple
+User=freeswitch
+Group=freeswitch
+WorkingDirectory=/opt/freeswitch-router
+ExecStart=/opt/freeswitch-router/router daemon
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
