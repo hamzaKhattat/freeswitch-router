@@ -3,14 +3,13 @@
 -- with proper ANI/DNIS/DID transformations
 
 -- Database connection parameters
-local db_host = "localhost"
-local db_name = "router_db"
-local db_user = "router"
-local db_pass = "router123"
+local db_dsn = "pgsql://host=localhost dbname=router_db user=router password=router123"
+
+local connection_string = "host=localhost dbname=router_db user=router password=router123"
 
 -- Function to connect to database
 function db_connect()
-    local dbh = freeswitch.Dbh("pgsql://" .. db_user .. ":" .. db_pass .. "@" .. db_host .. "/" .. db_name)
+    local dbh = freeswitch.Dbh("pgsql://" .. connection_string)
     if not dbh:connected() then
         freeswitch.consoleLog("ERROR", "Failed to connect to database\n")
         return nil
@@ -26,6 +25,8 @@ function allocate_did(dbh, ani, dnis, call_id, provider_id)
         "AND provider_id = %d ORDER BY RANDOM() LIMIT 1",
         provider_id
     )
+    
+    freeswitch.consoleLog("INFO", "Allocating DID for provider_id: " .. provider_id .. "\n")
     
     local allocated_did = nil
     local did_id = nil
@@ -48,6 +49,8 @@ function allocate_did(dbh, ani, dnis, call_id, provider_id)
         freeswitch.consoleLog("INFO", 
             string.format("Allocated DID %s for call %s (ANI: %s, DNIS: %s)\n",
                          allocated_did, call_id, ani, dnis))
+    else
+        freeswitch.consoleLog("ERROR", "No available DID for provider_id: " .. provider_id .. "\n")
     end
     
     return allocated_did
@@ -83,35 +86,6 @@ function find_original_dnis(dbh, did)
     return original_dnis, original_ani
 end
 
--- Function to record call in database
-function record_call(dbh, call_id, stage, ani, dnis, did, provider_ids)
-    local query = nil
-    
-    if stage == "origin" then
-        query = string.format(
-            "INSERT INTO call_records (call_id, origin_provider_id, " ..
-            "intermediate_provider_id, final_provider_id, original_ani, " ..
-            "original_dnis, assigned_did, current_stage, status) " ..
-            "VALUES ('%s', %s, %s, %s, '%s', '%s', '%s', 1, 'active') " ..
-            "ON CONFLICT (call_id) DO UPDATE SET current_stage = 1, updated_at = NOW()",
-            call_id, provider_ids.origin or 'NULL', 
-            provider_ids.intermediate or 'NULL',
-            provider_ids.final or 'NULL',
-            ani, dnis, did or ''
-        )
-    elseif stage == "intermediate_return" then
-        query = string.format(
-            "UPDATE call_records SET current_stage = 3, updated_at = NOW() " ..
-            "WHERE call_id = '%s'",
-            call_id
-        )
-    end
-    
-    if query then
-        dbh:query(query)
-    end
-end
-
 -- Main execution
 local stage = argv[1] or "unknown"
 local route_id = argv[2] or "0"
@@ -137,6 +111,8 @@ end
 
 if stage == "origin" then
     -- S1 -> S2: Incoming call from origin server
+    freeswitch.consoleLog("INFO", "Processing origin stage for route " .. route_id .. "\n")
+    
     -- Store original ANI (ANI-1) and DNIS (DNIS-1)
     session:setVariable("original_ani", ani)
     session:setVariable("original_dnis", dnis)
@@ -144,14 +120,17 @@ if stage == "origin" then
     session:setVariable("sip_h_X-Original-DNIS", dnis)
     session:setVariable("sip_h_X-Call-ID", call_uuid)
     
-    -- Get intermediate provider ID
+    -- Get intermediate provider ID from UUID
     local inter_provider_id = 0
-    local query = string.format(
-        "SELECT id FROM providers WHERE uuid = '%s'", next_provider
-    )
-    dbh:query(query, function(row)
-        inter_provider_id = tonumber(row.id)
-    end)
+    if next_provider and next_provider ~= "" then
+        local query = string.format(
+            "SELECT id FROM providers WHERE uuid = '%s'", next_provider
+        )
+        dbh:query(query, function(row)
+            inter_provider_id = tonumber(row.id)
+        end)
+        freeswitch.consoleLog("INFO", "Intermediate provider UUID: " .. next_provider .. " ID: " .. inter_provider_id .. "\n")
+    end
     
     -- Allocate a DID from the pool
     local allocated_did = allocate_did(dbh, ani, dnis, call_uuid, inter_provider_id)
@@ -162,14 +141,6 @@ if stage == "origin" then
         dbh:release()
         return
     end
-    
-    -- Record call in database
-    local provider_ids = {
-        origin = session:getVariable("origin_provider_id"),
-        intermediate = tostring(inter_provider_id),
-        final = session:getVariable("final_provider_id")
-    }
-    record_call(dbh, call_uuid, "origin", ani, dnis, allocated_did, provider_ids)
     
     -- S2 -> S3: Forward to intermediate with transformations
     -- Replace ANI-1 with DNIS-1 (now becomes ANI-2)
@@ -188,8 +159,9 @@ if stage == "origin" then
     
 elseif stage == "intermediate_return" then
     -- S3 -> S2: Return call from intermediate server
-    -- The call comes back with ANI-2 (which was DNIS-1) and DID
+    freeswitch.consoleLog("INFO", "Processing intermediate_return stage\n")
     
+    -- The call comes back with ANI-2 (which was DNIS-1) and DID
     -- Find the original DNIS-1 and ANI-1 from the DID
     local original_dnis, original_ani = find_original_dnis(dbh, dnis)
     
@@ -200,29 +172,6 @@ elseif stage == "intermediate_return" then
         dbh:release()
         return
     end
-    
-    -- Verify this call originated from S1
-    local call_id = session:getVariable("sip_h_X-Call-ID") or call_uuid
-    local verify_query = string.format(
-        "SELECT COUNT(*) as count FROM call_records " ..
-        "WHERE call_id = '%s' AND origin_provider_id IS NOT NULL",
-        call_id
-    )
-    
-    local is_valid = false
-    dbh:query(verify_query, function(row)
-        is_valid = (tonumber(row.count) > 0)
-    end)
-    
-    if not is_valid then
-        freeswitch.consoleLog("ERROR", "Call not originated from S1 - rejecting with 503\n")
-        session:hangup("SERVICE_UNAVAILABLE")
-        dbh:release()
-        return
-    end
-    
-    -- Update call record
-    record_call(dbh, call_id, "intermediate_return", ani, dnis, nil, {})
     
     -- Release the DID back to the pool
     release_did(dbh, dnis)
@@ -248,4 +197,3 @@ end
 if dbh then
     dbh:release()
 end
-

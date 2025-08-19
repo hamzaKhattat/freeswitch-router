@@ -3746,3 +3746,170 @@ LINE 1: ...INTO call_validation_rules (rule_name, rule_type, rule_condi...
 2025-08-19 11:07:21 [INFO] [src/freeswitch/fs_generate_module2_dialplan.c:620] Module 2 dialplan generation complete - generated 1833016528 route dialplans
 2025-08-19 11:07:21 [INFO] [src/freeswitch/fs_xml_generator.c:695] Reloading FreeSWITCH configuration...
 2025-08-19 11:07:23 [INFO] [src/freeswitch/fs_xml_generator.c:702] FreeSWITCH configuration reloaded
+2025-08-19 11:34:56 [ERROR] [src/db/database_pg.c:37] Query failed: ERROR:  column "call_id" does not exist
+LINE 1: SELECT event_type, severity, call_id, source_ip, details, cr...
+                                     ^
+HINT:  Perhaps you meant to reference the column "security_events.call_uuid".
+
+2025-08-19 11:35:14 [ERROR] [src/db/database_pg.c:37] Query failed: ERROR:  column c.call_id does not exist
+LINE 1: SELECT c.call_id, c.ani, c.dnis, p.host as source_ip, d.did,...
+               ^
+HINT:  Perhaps you meant to reference the column "d.call_id".
+
+2025-08-19 11:35:14 [INFO] [src/validation/call_validator.c:305] Validating call initiation: ID=test_1755599714, ANI=15551234567, DNIS=12125551234, Source=10.0.0.1
+2025-08-19 11:35:14 [ERROR] [src/db/database_pg.c:37] Query failed: ERROR:  column "call_id" of relation "validation_checkpoints" does not exist
+LINE 1: ...alidation_checkpoints (checkpoint_name, route_id, call_id, p...
+                                                             ^
+
+2025-08-19 11:35:14 [DEBUG] [src/validation/call_validator.c:686] Checkpoint call_initiated for call test_1755599714: PASSED
+2025-08-19 11:35:14 [ERROR] [src/db/database_pg.c:37] Query failed: ERROR:  column "call_id" of relation "validation_checkpoints" does not exist
+LINE 1: ...alidation_checkpoints (checkpoint_name, route_id, call_id, p...
+                                                             ^
+
+2025-08-19 11:35:14 [DEBUG] [src/validation/call_validator.c:686] Checkpoint state_2 for call test_1755599714: PASSED
+2025-08-19 11:35:14 [INFO] [src/validation/call_validator.c:426] Call test_1755599714: State updated to 2
+2025-08-19 11:35:14 [ERROR] [src/db/database_pg.c:37] Query failed: ERROR:  column "call_id" of relation "validation_checkpoints" does not exist
+LINE 1: ...alidation_checkpoints (checkpoint_name, route_id, call_id, p...
+                                                             ^
+
+2025-08-19 11:35:14 [DEBUG] [src/validation/call_validator.c:686] Checkpoint did_assignment for call test_1755599714: PASSED
+2025-08-19 11:35:14 [INFO] [src/validation/call_validator.c:539] Call test_1755599714: DID 12125551001 assignment validated
+2025-08-19 11:35:14 [ERROR] [src/db/database_pg.c:37] Query failed: ERROR:  column "call_id" of relation "validation_checkpoints" does not exist
+LINE 1: ...alidation_checkpoints (checkpoint_name, route_id, call_id, p...
+                                                             ^
+
+2025-08-19 11:35:14 [DEBUG] [src/validation/call_validator.c:686] Checkpoint route_validation for call test_1755599714: PASSED
+2025-08-19 11:35:14 [INFO] [src/validation/call_validator.c:479] Call test_1755599714: Route validated to 10.0.0.4
+2025-08-19 11:35:14 [ERROR] [src/db/database_pg.c:37] Query failed: ERROR:  column "call_id" of relation "validation_checkpoints" does not exist
+LINE 1: ...alidation_checkpoints (checkpoint_name, route_id, call_id, p...
+                                                             ^
+
+2025-08-19 11:35:14 [DEBUG] [src/validation/call_validator.c:686] Checkpoint state_3 for call test_1755599714: PASSED
+2025-08-19 11:35:14 [INFO] [src/validation/call_validator.c:426] Call test_1755599714: State updated to 3
+2025-08-19 11:35:14 [ERROR] [src/db/database_pg.c:37] Query failed: ERROR:  column "call_id" of relation "validation_checkpoints" does not exist
+LINE 1: ...alidation_checkpoints (checkpoint_name, route_id, call_id, p...
+                                                             ^
+
+2025-08-19 11:35:14 [DEBUG] [src/validation/call_validator.c:686] Checkpoint state_4 for call test_1755599714: PASSED
+2025-08-19 11:35:14 [INFO] [src/validation/call_validator.c:426] Call test_1755599714: State updated to 4
+2025-08-19 11:35:14 [ERROR] [src/db/database_pg.c:37] Query failed: ERROR:  column "call_id" does not exist
+LINE 1: DELETE FROM validation_checkpoints WHERE call_id = 'test_175...
+                                                 ^
+HINT:  Perhaps you meant to reference the column "validation_checkpoints.call_uuid".
+
+2025-08-19 11:35:15 [ERROR] [src/db/database_pg.c:37] Query failed: ERROR:  column "call_id" does not exist
+LINE 1: SELECT status FROM active_calls WHERE call_id = 'test_175559...
+                                              ^
+HINT:  Perhaps you meant to reference the column "active_calls.call_uuid".
+
+2025-08-19 11:35:15 [WARN] [src/validation/call_validator.c:138] Call test_1755599714: Cannot verify state with destination server
+2025-08-19 11:35:20 [ERROR] [src/db/database_pg.c:37] Query failed: ERROR:  column "call_id" does not exist
+LINE 1: SELECT status FROM active_calls WHERE call_id = 'test_175559...
+                                              ^
+HINT:  Perhaps you meant to reference the column "active_calls.call_uuid".
+
+2025-08-19 11:35:20 [WARN] [src/validation/call_validator.c:138] Call test_1755599714: Cannot verify state with destination server
+2025-08-19 11:35:25 [ERROR] [src/db/database_pg.c:37] Query failed: ERROR:  column "call_id" does not exist
+LINE 1: SELECT status FROM active_calls WHERE call_id = 'test_175559...
+                                              ^
+HINT:  Perhaps you meant to reference the column "active_calls.call_uuid".
+
+2025-08-19 11:35:25 [WARN] [src/validation/call_validator.c:138] Call test_1755599714: Cannot verify state with destination server
+2025-08-19 11:35:30 [ERROR] [src/db/database_pg.c:37] Query failed: ERROR:  column "call_id" does not exist
+LINE 1: SELECT status FROM active_calls WHERE call_id = 'test_175559...
+                                              ^
+HINT:  Perhaps you meant to reference the column "active_calls.call_uuid".
+
+2025-08-19 11:35:30 [WARN] [src/validation/call_validator.c:138] Call test_1755599714: Cannot verify state with destination server
+2025-08-19 11:35:35 [ERROR] [src/validation/call_validator.c:93] Call test_1755599714: State mismatch detected - Expected: 2, Current: 4
+2025-08-19 11:35:35 [ERROR] [src/db/database_pg.c:37] Query failed: ERROR:  column "call_id" of relation "security_events" does not exist
+LINE 1: ...NSERT INTO security_events (event_type, severity, call_id, d...
+                                                             ^
+
+2025-08-19 11:35:35 [WARN] [src/validation/call_validator.c:641] SECURITY EVENT: Type=STATE_MISMATCH, Severity=CRITICAL, Call=test_1755599714, Details=Call state does not match expected progression
+2025-08-19 11:35:35 [WARN] [src/validation/call_validator.c:749] Forcing hangup of invalid call: test_1755599714
+2025-08-19 11:35:35 [ERROR] [src/db/database_pg.c:37] Query failed: ERROR:  column "failure_reason" of relation "call_records" does not exist
+LINE 1: ... status = 'failed', ended_at = CURRENT_TIMESTAMP, failure_re...
+                                                             ^
+
+2025-08-19 12:11:01 [INFO] [src/freeswitch/fs_generate_module2_dialplan.c:332] Removed dialplan file: /etc/freeswitch/dialplan/public/route_6.xml
+2025-08-19 12:11:01 [INFO] [src/freeswitch/fs_generate_module2_dialplan.c:322] Generated complete corrected route handler Lua script at /usr/local/freeswitch/share/freeswitch/scripts/route_handler_corrected.lua
+2025-08-19 12:11:01 [INFO] [src/freeswitch/fs_generate_module2_dialplan.c:416] Generated main public dialplan at /etc/freeswitch/dialplan/public.xml
+2025-08-19 12:11:01 [ERROR] [src/freeswitch/fs_generate_module2_dialplan.c:434] Failed to query routes
+2025-08-19 12:11:01 [INFO] [src/freeswitch/fs_xml_generator.c:695] Reloading FreeSWITCH configuration...
+2025-08-19 12:11:05 [INFO] [src/freeswitch/fs_xml_generator.c:702] FreeSWITCH configuration reloaded
+2025-08-19 12:11:25 [INFO] [src/freeswitch/fs_xml_generator.c:689] Removed provider config for eb1189a8-37ce-4dd2-9276-c61993ab3053 (role: origin)
+2025-08-19 12:11:25 [INFO] [src/freeswitch/fs_xml_generator.c:695] Reloading FreeSWITCH configuration...
+2025-08-19 12:11:29 [INFO] [src/freeswitch/fs_xml_generator.c:702] FreeSWITCH configuration reloaded
+2025-08-19 12:11:31 [INFO] [src/freeswitch/fs_xml_generator.c:689] Removed provider config for 18660468-d2aa-4b7e-b94b-2c34bb5f2695 (role: final)
+2025-08-19 12:11:31 [INFO] [src/freeswitch/fs_xml_generator.c:695] Reloading FreeSWITCH configuration...
+2025-08-19 12:11:34 [INFO] [src/freeswitch/fs_xml_generator.c:702] FreeSWITCH configuration reloaded
+2025-08-19 12:11:36 [INFO] [src/freeswitch/fs_xml_generator.c:689] Removed provider config for 9f8f4236-ef5c-4f0f-a6fd-3a7108950477 (role: intermediate)
+2025-08-19 12:11:36 [INFO] [src/freeswitch/fs_xml_generator.c:695] Reloading FreeSWITCH configuration...
+2025-08-19 12:11:40 [INFO] [src/freeswitch/fs_xml_generator.c:702] FreeSWITCH configuration reloaded
+2025-08-19 12:15:01 [INFO] [src/freeswitch/fs_xml_generator.c:315] Generated gateway config for s1 (UUID: 908ed549-75a1-4c5d-babd-74a02d86831f, Role: origin)
+2025-08-19 12:15:45 [INFO] [src/freeswitch/fs_xml_generator.c:315] Generated gateway config for s3 (UUID: 295bfae6-7584-4d52-a6f1-0991455715cc, Role: intermediate)
+2025-08-19 12:16:04 [INFO] [src/freeswitch/fs_xml_generator.c:315] Generated gateway config for s4 (UUID: 923dfe10-b39d-448a-a271-483ea038eaf7, Role: final)
+2025-08-19 12:16:28 [INFO] [src/freeswitch/fs_generate_module2_dialplan.c:322] Generated complete corrected route handler Lua script at /usr/local/freeswitch/share/freeswitch/scripts/route_handler_corrected.lua
+2025-08-19 12:16:28 [INFO] [src/freeswitch/fs_generate_module2_dialplan.c:416] Generated main public dialplan at /etc/freeswitch/dialplan/public.xml
+2025-08-19 12:16:28 [INFO] [src/freeswitch/fs_generate_module2_dialplan.c:438] Found 1 active routes to generate dialplans for
+2025-08-19 12:16:28 [INFO] [src/freeswitch/fs_generate_module2_dialplan.c:102] Cached dialplan for route test_route
+2025-08-19 12:16:28 [INFO] [src/freeswitch/fs_generate_module2_dialplan.c:587] Generated dialplan for route test_route: s1 -> s3 -> s4 (file: /etc/freeswitch/dialplan/public/route_7.xml)
+2025-08-19 12:16:28 [INFO] [src/freeswitch/fs_generate_module2_dialplan.c:614] Generated default catch-all extension
+2025-08-19 12:16:28 [INFO] [src/freeswitch/fs_xml_generator.c:695] Reloading FreeSWITCH configuration...
+2025-08-19 12:16:51 [INFO] [src/freeswitch/fs_xml_generator.c:702] FreeSWITCH configuration reloaded
+2025-08-19 12:16:51 [INFO] [src/freeswitch/fs_generate_module2_dialplan.c:620] Module 2 dialplan generation complete - generated -1605788960 route dialplans
+2025-08-19 12:16:51 [INFO] [src/freeswitch/fs_xml_generator.c:695] Reloading FreeSWITCH configuration...
+2025-08-19 12:16:53 [INFO] [src/freeswitch/fs_xml_generator.c:702] FreeSWITCH configuration reloaded
+2025-08-19 12:23:25 [INFO] [src/main.c:137] FreeSWITCH Dynamic Router with Validation starting...
+2025-08-19 12:23:25 [INFO] [src/core/config.c:159] Configuration loaded successfully
+2025-08-19 12:23:25 [INFO] [src/main.c:145] Connecting to PostgreSQL database...
+2025-08-19 12:23:25 [INFO] [src/db/database_pg.c:147] Connected to PostgreSQL database
+2025-08-19 12:23:25 [INFO] [src/main.c:152] Database connected successfully
+2025-08-19 12:23:25 [INFO] [src/router/router.c:46] Router created successfully
+2025-08-19 12:23:25 [INFO] [src/main.c:162] Router initialized
+2025-08-19 12:23:25 [INFO] [src/main.c:165] Initializing call validation system...
+2025-08-19 12:23:25 [ERROR] [src/db/database_pg.c:37] Query failed: ERROR:  column "rule_condition" of relation "call_validation_rules" does not exist
+LINE 1: ...INTO call_validation_rules (rule_name, rule_type, rule_condi...
+                                                             ^
+
+2025-08-19 12:23:25 [INFO] [src/validation/call_validator.c:243] Call validator created with interval=5000ms, timeout=30000ms
+2025-08-19 12:23:25 [INFO] [src/validation/call_validator.c:282] Call validator started
+2025-08-19 12:23:25 [INFO] [src/main.c:183] Call validation system started
+2025-08-19 12:23:25 [INFO] [src/validation/call_validator.c:58] Call validation thread started
+2025-08-19 12:23:25 [INFO] [src/main.c:115] Validation monitor thread started
+2025-08-19 12:23:26 [INFO] [src/main.c:51] FreeSWITCH is running
+2025-08-19 12:23:26 [INFO] [src/main.c:56] Initializing FreeSWITCH configuration...
+2025-08-19 12:23:26 [INFO] [src/freeswitch/fs_xml_generator.c:58] Initializing FreeSWITCH directories...
+2025-08-19 12:23:26 [INFO] [src/freeswitch/fs_xml_generator.c:90] Directory structure initialized
+2025-08-19 12:23:26 [INFO] [src/freeswitch/fs_xml_generator.c:124] Generated main config: /etc/freeswitch/conf/freeswitch.xml
+2025-08-19 12:23:26 [INFO] [src/freeswitch/fs_xml_generator.c:209] Generated SIP profiles
+2025-08-19 12:23:26 [INFO] [src/freeswitch/fs_xml_generator.c:666] Generated dialplan contexts
+2025-08-19 12:23:26 [INFO] [src/freeswitch/fs_xml_generator.c:638] Generated autoload configs
+2025-08-19 12:23:26 [INFO] [src/main.c:83] FreeSWITCH base configuration initialized
+2025-08-19 12:23:26 [INFO] [src/main.c:90] Synchronizing FreeSWITCH with database...
+2025-08-19 12:23:26 [INFO] [src/main.c:91] Generating provider configurations...
+2025-08-19 12:23:26 [INFO] [src/freeswitch/fs_xml_generator.c:315] Generated gateway config for s1 (UUID: 908ed549-75a1-4c5d-babd-74a02d86831f, Role: origin)
+2025-08-19 12:23:26 [INFO] [src/freeswitch/fs_xml_generator.c:315] Generated gateway config for s3 (UUID: 295bfae6-7584-4d52-a6f1-0991455715cc, Role: intermediate)
+2025-08-19 12:23:26 [INFO] [src/freeswitch/fs_xml_generator.c:315] Generated gateway config for s4 (UUID: 923dfe10-b39d-448a-a271-483ea038eaf7, Role: final)
+2025-08-19 12:23:26 [INFO] [src/freeswitch/fs_xml_generator.c:758] Regenerated all provider configurations
+2025-08-19 12:23:26 [INFO] [src/main.c:93] Generating route dialplans...
+2025-08-19 12:23:26 [INFO] [src/freeswitch/fs_xml_generator.c:374] Generated main public dialplan
+2025-08-19 12:23:26 [INFO] [src/freeswitch/fs_xml_generator.c:396] Found 1 active routes to generate dialplans for
+2025-08-19 12:23:26 [INFO] [src/freeswitch/fs_xml_generator.c:478] Generated dialplan for route test_route: s1 -> s3 -> s4
+2025-08-19 12:23:26 [INFO] [src/freeswitch/fs_xml_generator.c:562] Generated route_handler.lua
+2025-08-19 12:23:26 [INFO] [src/freeswitch/fs_xml_generator.c:490] Dialplan generation complete
+2025-08-19 12:23:26 [INFO] [src/main.c:95] Reloading FreeSWITCH...
+2025-08-19 12:23:26 [INFO] [src/freeswitch/fs_xml_generator.c:695] Reloading FreeSWITCH configuration...
+2025-08-19 12:23:30 [INFO] [src/freeswitch/fs_xml_generator.c:702] FreeSWITCH configuration reloaded
+2025-08-19 12:23:30 [INFO] [src/main.c:97] FreeSWITCH synchronized with database
+2025-08-19 12:23:57 [INFO] [src/freeswitch/fs_generate_module2_dialplan.c:322] Generated complete corrected route handler Lua script at /usr/local/freeswitch/share/freeswitch/scripts/route_handler_corrected.lua
+2025-08-19 12:23:57 [INFO] [src/freeswitch/fs_generate_module2_dialplan.c:416] Generated main public dialplan at /etc/freeswitch/dialplan/public.xml
+2025-08-19 12:23:57 [INFO] [src/freeswitch/fs_generate_module2_dialplan.c:438] Found 1 active routes to generate dialplans for
+2025-08-19 12:23:57 [INFO] [src/freeswitch/fs_generate_module2_dialplan.c:102] Cached dialplan for route test_route
+2025-08-19 12:23:57 [INFO] [src/freeswitch/fs_generate_module2_dialplan.c:587] Generated dialplan for route test_route: s1 -> s3 -> s4 (file: /etc/freeswitch/dialplan/public/route_7.xml)
+2025-08-19 12:23:57 [INFO] [src/freeswitch/fs_xml_generator.c:695] Reloading FreeSWITCH configuration...
+2025-08-19 12:24:01 [INFO] [src/freeswitch/fs_xml_generator.c:702] FreeSWITCH configuration reloaded
+2025-08-19 12:24:01 [INFO] [src/freeswitch/fs_generate_module2_dialplan.c:620] Module 2 dialplan generation complete - generated 829026258 route dialplans
+2025-08-19 12:24:01 [INFO] [src/freeswitch/fs_xml_generator.c:695] Reloading FreeSWITCH configuration...
+2025-08-19 12:24:04 [INFO] [src/freeswitch/fs_xml_generator.c:702] FreeSWITCH configuration reloaded

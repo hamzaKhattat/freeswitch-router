@@ -59,17 +59,12 @@
 │   ├── production.json
 │   ├── providers
 │   └── routes
-├── dep
-├── deploy
 ├── DEPLOYMENT.md
 ├── dialplan_test.sh
 ├── docs
 ├── examples
 │   ├── routing_demo.sh
 │   └── usage.sh
-├── fix
-├── fix_patch
-├── fixs
 ├── generate_dynamic_dialplan.sh
 ├── include
 │   ├── api
@@ -246,7 +241,7 @@
 ├── test_module2.sh
 └── test_sip.py
 
-50 directories, 197 files
+50 directories, 192 files
 #include <microhttpd.h>
 #include <string.h>
 #include "core/logging.h"
@@ -1935,17 +1930,8 @@ int provider_add_enhanced(const char *name, const char *host, int port,
     free(uuid);
     return 0;
 }
-// src/commands/route_cmd_enhanced.c
-#include <stdio.h>
-#include <string.h>
-#include <stdlib.h>
-#include <unistd.h>
-#include <uuid/uuid.h>
-#include "commands/route_cmd.h"
-#include "db/database.h"
-#include "core/logging.h"
-#include "freeswitch/fs_xml_generator.h"
-// src/commands/route_cmd.c - Add these after includes
+// src/commands/route_cmd.c
+// Complete implementation with enhanced functions properly integrated
 
 #include <stdio.h>
 #include <string.h>
@@ -1963,18 +1949,12 @@ extern int fs_remove_route_dialplan(const char *route_id);
 extern int fs_clear_dialplan_cache(void);
 extern int fs_restore_dialplans_from_cache(void);
 
-// Internal function declarations (if you merged enhanced functions)
+// Forward declarations for enhanced functions
 static int cmd_route_add_enhanced(int argc, char *argv[]);
 static int cmd_route_delete_enhanced(int argc, char *argv[]);
 static int cmd_route_reload_enhanced(int argc, char *argv[]);
 static int cmd_route_test_enhanced(int argc, char *argv[]);
 static int cmd_route_cache(int argc, char *argv[]);
-
-// Your existing cmd_route function and others follow...
-// External function declarations
-extern int fs_generate_module2_route_dialplan(void);
-extern int fs_remove_route_dialplan(const char *route_id);
-extern int fs_clear_dialplan_cache(void);
 
 static char* generate_uuid(void) {
     uuid_t uuid;
@@ -1984,6 +1964,7 @@ static char* generate_uuid(void) {
     return uuid_str;
 }
 
+// Main route command dispatcher - USES ENHANCED VERSIONS
 int cmd_route(int argc, char *argv[]) {
     if (argc < 2) {
         printf("Usage: route <add|delete|list|show|reload|test|cache> [options]\n");
@@ -1998,18 +1979,19 @@ int cmd_route(int argc, char *argv[]) {
         return -1;
     }
     
+    // USE ENHANCED VERSIONS FOR ALL COMMANDS
     if (strcmp(argv[1], "add") == 0) {
-        return cmd_route_add_enhanced(argc, argv);
+        return cmd_route_add_enhanced(argc, argv);  // Enhanced version
     } else if (strcmp(argv[1], "delete") == 0) {
-        return cmd_route_delete_enhanced(argc, argv);
+        return cmd_route_delete_enhanced(argc, argv);  // Enhanced version
     } else if (strcmp(argv[1], "list") == 0) {
         return cmd_route_list(argc, argv);
     } else if (strcmp(argv[1], "show") == 0) {
         return cmd_route_show(argc, argv);
     } else if (strcmp(argv[1], "reload") == 0) {
-        return cmd_route_reload_enhanced(argc, argv);
+        return cmd_route_reload_enhanced(argc, argv);  // Enhanced version
     } else if (strcmp(argv[1], "test") == 0) {
-        return cmd_route_test_enhanced(argc, argv);
+        return cmd_route_test_enhanced(argc, argv);  // Enhanced version
     } else if (strcmp(argv[1], "cache") == 0) {
         return cmd_route_cache(argc, argv);
     }
@@ -2018,7 +2000,8 @@ int cmd_route(int argc, char *argv[]) {
     return -1;
 }
 
-int cmd_route_add_enhanced(int argc, char *argv[]) {
+// Enhanced add command with full Module 2 support
+static int cmd_route_add_enhanced(int argc, char *argv[]) {
     if (argc < 8) {
         printf("Usage: route add <name> <origin> <intermediate> <final> <pattern> <priority>\n");
         printf("\nModule 2 Call Flow:\n");
@@ -2085,7 +2068,8 @@ int cmd_route_add_enhanced(int argc, char *argv[]) {
         // Check DIDs for intermediate provider (required for Module 2)
         if (i == 1 && did_counts[i] == 0) {
             printf("Error: Intermediate provider '%s' has no DIDs available\n", inter_name);
-            printf("Please add DIDs first using: did import <csv_file> %s\n", inter_name);
+            printf("Please add DIDs first using: did add <number> <country> %s\n", inter_name);
+            printf("Or import multiple: did import <csv_file> %s\n", inter_name);
             db_free_result(result);
             db_finalize(stmt);
             return -1;
@@ -2156,6 +2140,7 @@ int cmd_route_add_enhanced(int argc, char *argv[]) {
     
     printf("\nGenerating FreeSWITCH dialplan with caching...\n");
     
+    // CALL THE DIALPLAN GENERATION FUNCTION
     if (fs_generate_module2_route_dialplan() == 0) {
         printf("  ✓ Generated and cached route dialplan\n");
         printf("  ✓ Generated Lua handler scripts\n");
@@ -2170,7 +2155,8 @@ int cmd_route_add_enhanced(int argc, char *argv[]) {
     return 0;
 }
 
-int cmd_route_delete_enhanced(int argc, char *argv[]) {
+// Enhanced delete command
+static int cmd_route_delete_enhanced(int argc, char *argv[]) {
     if (argc < 3) {
         printf("Usage: route delete <id|name>\n");
         return -1;
@@ -2222,7 +2208,8 @@ int cmd_route_delete_enhanced(int argc, char *argv[]) {
     return 0;
 }
 
-int cmd_route_reload_enhanced(int argc, char *argv[]) {
+// Enhanced reload command
+static int cmd_route_reload_enhanced(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
     
@@ -2248,7 +2235,8 @@ int cmd_route_reload_enhanced(int argc, char *argv[]) {
     return 0;
 }
 
-int cmd_route_test_enhanced(int argc, char *argv[]) {
+// Enhanced test command
+static int cmd_route_test_enhanced(int argc, char *argv[]) {
     if (argc < 3) {
         printf("Usage: route test <number>\n");
         printf("Tests which route would handle the given number\n");
@@ -2324,7 +2312,8 @@ int cmd_route_test_enhanced(int argc, char *argv[]) {
     return 0;
 }
 
-int cmd_route_cache(int argc, char *argv[]) {
+// Cache management command
+static int cmd_route_cache(int argc, char *argv[]) {
     if (argc < 3) {
         printf("Usage: route cache <clear|restore|status>\n");
         return -1;
@@ -2349,6 +2338,7 @@ int cmd_route_cache(int argc, char *argv[]) {
     return 0;
 }
 
+// List command
 int cmd_route_list(int argc, char *argv[]) {
     (void)argc;
     (void)argv;
@@ -2417,6 +2407,7 @@ int cmd_route_list(int argc, char *argv[]) {
     return 0;
 }
 
+// Show command
 int cmd_route_show(int argc, char *argv[]) {
     if (argc < 3) {
         printf("Usage: route show <id|name>\n");
@@ -2454,116 +2445,22 @@ int cmd_route_show(int argc, char *argv[]) {
     db_free_result(result);
     return 0;
 }
-// Fix for route add command - proper boolean handling
-#include <stdio.h>
-#include <string.h>
-#include <stdlib.h>
-#include "commands/route_cmd.h"
-#include "db/database.h"
-#include "core/logging.h"
 
+// Stub for backward compatibility
 int cmd_route_add(int argc, char *argv[]) {
-    if (argc < 8) {
-        printf("Usage: route add <name> <origin> <intermediate> <final> <pattern> <priority>\n");
-        printf("Example: route add test_route s1 s3 s4 '.*' 100\n");
-        return -1;
-    }
-    
-    const char *name = argv[2];
-    const char *origin = argv[3];
-    const char *intermediate = argv[4];
-    const char *final = argv[5];
-    const char *pattern = argv[6];
-    int priority = atoi(argv[7]);
-    
-    database_t *db = get_database();
-    if (!db) {
-        printf("Database not initialized\n");
-        return -1;
-    }
-    
-    // Get provider IDs
-    int origin_id = 0, inter_id = 0, final_id = 0;
-    
-    // Get origin provider ID
-    const char *sql = "SELECT id FROM providers WHERE name = ?";
-    db_stmt_t *stmt = db_prepare(db, sql);
-    db_bind_string(stmt, 1, origin);
-    db_result_t *result = db_execute_query(stmt);
-    
-    if (result && result->num_rows > 0) {
-        origin_id = atoi(db_get_value(result, 0, 0));
-        db_free_result(result);
-    } else {
-        printf("Origin provider '%s' not found\n", origin);
-        if (result) db_free_result(result);
-        db_finalize(stmt);
-        return -1;
-    }
-    db_finalize(stmt);
-    
-    // Get intermediate provider ID
-    stmt = db_prepare(db, sql);
-    db_bind_string(stmt, 1, intermediate);
-    result = db_execute_query(stmt);
-    
-    if (result && result->num_rows > 0) {
-        inter_id = atoi(db_get_value(result, 0, 0));
-        db_free_result(result);
-    } else {
-        printf("Intermediate provider '%s' not found\n", intermediate);
-        if (result) db_free_result(result);
-        db_finalize(stmt);
-        return -1;
-    }
-    db_finalize(stmt);
-    
-    // Get final provider ID
-    stmt = db_prepare(db, sql);
-    db_bind_string(stmt, 1, final);
-    result = db_execute_query(stmt);
-    
-    if (result && result->num_rows > 0) {
-        final_id = atoi(db_get_value(result, 0, 0));
-        db_free_result(result);
-    } else {
-        printf("Final provider '%s' not found\n", final);
-        if (result) db_free_result(result);
-        db_finalize(stmt);
-        return -1;
-    }
-    db_finalize(stmt);
-    
-    // Insert route with proper boolean value
-    const char *insert_sql = 
-        "INSERT INTO routes (name, origin_provider_id, intermediate_provider_id, "
-        "final_provider_id, pattern, priority, active) "
-        "VALUES (?, ?, ?, ?, ?, ?, true)";  // Note: using 'true' instead of 1
-    
-    stmt = db_prepare(db, insert_sql);
-    db_bind_string(stmt, 1, name);
-    db_bind_int(stmt, 2, origin_id);
-    db_bind_int(stmt, 3, inter_id);
-    db_bind_int(stmt, 4, final_id);
-    db_bind_string(stmt, 5, pattern);
-    db_bind_int(stmt, 6, priority);
-    
-    if (db_execute(stmt) < 0) {
-        printf("Failed to add route\n");
-        db_finalize(stmt);
-        return -1;
-    }
-    
-    db_finalize(stmt);
-    
-    printf("Route '%s' added successfully\n", name);
-    printf("  Origin: %s (ID: %d)\n", origin, origin_id);
-    printf("  Intermediate: %s (ID: %d)\n", intermediate, inter_id);
-    printf("  Final: %s (ID: %d)\n", final, final_id);
-    printf("  Pattern: %s\n", pattern);
-    printf("  Priority: %d\n", priority);
-    
-    return 0;
+    return cmd_route_add_enhanced(argc, argv);
+}
+
+int cmd_route_delete(int argc, char *argv[]) {
+    return cmd_route_delete_enhanced(argc, argv);
+}
+
+int cmd_route_test(int argc, char *argv[]) {
+    return cmd_route_test_enhanced(argc, argv);
+}
+
+int cmd_route_reload(int argc, char *argv[]) {
+    return cmd_route_reload_enhanced(argc, argv);
 }
 #include <stdio.h>
 #include <string.h>
@@ -4146,7 +4043,7 @@ void fs_monitor_gateways(void) {
     // Implementation for monitoring
 }
 // src/freeswitch/fs_generate_module2_dialplan.c
-// Complete implementation with full Lua script embedded
+// Complete implementation with all fixes
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -4160,7 +4057,8 @@ void fs_monitor_gateways(void) {
 
 #define CACHE_DIR "/opt/freeswitch-router/cache/dialplans"
 #define DIALPLAN_DIR "/etc/freeswitch/dialplan/public"
-#define SCRIPTS_DIR "/etc/freeswitch/scripts"
+#define DIALPLAN_BASE_DIR "/etc/freeswitch/dialplan"
+#define SCRIPTS_DIR "/usr/local/freeswitch/share/freeswitch/scripts"
 
 // Structure to cache generated dialplan configuration
 typedef struct dialplan_cache {
@@ -4202,6 +4100,21 @@ static int init_cache_directory(void) {
         }
     }
     
+    // Ensure dialplan directories exist
+    if (stat(DIALPLAN_BASE_DIR, &st) == -1) {
+        if (mkdir(DIALPLAN_BASE_DIR, 0755) != 0) {
+            LOG_ERROR("Failed to create dialplan base directory");
+            return -1;
+        }
+    }
+    
+    if (stat(DIALPLAN_DIR, &st) == -1) {
+        if (mkdir(DIALPLAN_DIR, 0755) != 0) {
+            LOG_ERROR("Failed to create dialplan public directory");
+            return -1;
+        }
+    }
+    
     return 0;
 }
 
@@ -4234,7 +4147,7 @@ static int cache_dialplan(const char *route_id, const char *route_name,
     return 0;
 }
 
-// Generate the complete corrected Lua handler script
+// Generate the complete corrected Lua handler script with FIXED connection string
 int fs_generate_corrected_lua_handler(void) {
     char filepath[512];
     FILE *fp;
@@ -4246,20 +4159,19 @@ int fs_generate_corrected_lua_handler(void) {
         return -1;
     }
     
-    // Write the complete corrected Lua script
+    // Write the complete corrected Lua script with FIXED database connection
     fprintf(fp, "-- route_handler_corrected.lua\n");
     fprintf(fp, "-- Implements Module 2 requirements: S1 -> S2 -> S3 -> S2 -> S4\n");
     fprintf(fp, "-- with proper ANI/DNIS/DID transformations\n\n");
     
     fprintf(fp, "-- Database connection parameters\n");
-    fprintf(fp, "local db_host = \"localhost\"\n");
-    fprintf(fp, "local db_name = \"router_db\"\n");
-    fprintf(fp, "local db_user = \"router\"\n");
-    fprintf(fp, "local db_pass = \"router123\"\n\n");
-    
-    fprintf(fp, "-- Function to connect to database\n");
-    fprintf(fp, "function db_connect()\n");
-    fprintf(fp, "    local dbh = freeswitch.Dbh(\"pgsql://\" .. db_user .. \":\" .. db_pass .. \"@\" .. db_host .. \"/\" .. db_name)\n");
+    fprintf(fp, "local db_dsn = \"pgsql://host=localhost dbname=router_db user=router password=router123\"\n\n");
+    fprintf(fp, "local connection_string = \"host=localhost dbname=router_db user=router password=router123\"\n\n");
+
+fprintf(fp, "-- Function to connect to database\n");
+fprintf(fp, "function db_connect()\n");
+fprintf(fp, "    local dbh = freeswitch.Dbh(\"pgsql://\" .. connection_string)\n");
+
     fprintf(fp, "    if not dbh:connected() then\n");
     fprintf(fp, "        freeswitch.consoleLog(\"ERROR\", \"Failed to connect to database\\n\")\n");
     fprintf(fp, "        return nil\n");
@@ -4275,6 +4187,8 @@ int fs_generate_corrected_lua_handler(void) {
     fprintf(fp, "        \"AND provider_id = %%d ORDER BY RANDOM() LIMIT 1\",\n");
     fprintf(fp, "        provider_id\n");
     fprintf(fp, "    )\n");
+    fprintf(fp, "    \n");
+    fprintf(fp, "    freeswitch.consoleLog(\"INFO\", \"Allocating DID for provider_id: \" .. provider_id .. \"\\n\")\n");
     fprintf(fp, "    \n");
     fprintf(fp, "    local allocated_did = nil\n");
     fprintf(fp, "    local did_id = nil\n");
@@ -4297,6 +4211,8 @@ int fs_generate_corrected_lua_handler(void) {
     fprintf(fp, "        freeswitch.consoleLog(\"INFO\", \n");
     fprintf(fp, "            string.format(\"Allocated DID %%s for call %%s (ANI: %%s, DNIS: %%s)\\n\",\n");
     fprintf(fp, "                         allocated_did, call_id, ani, dnis))\n");
+    fprintf(fp, "    else\n");
+    fprintf(fp, "        freeswitch.consoleLog(\"ERROR\", \"No available DID for provider_id: \" .. provider_id .. \"\\n\")\n");
     fprintf(fp, "    end\n");
     fprintf(fp, "    \n");
     fprintf(fp, "    return allocated_did\n");
@@ -4332,35 +4248,6 @@ int fs_generate_corrected_lua_handler(void) {
     fprintf(fp, "    return original_dnis, original_ani\n");
     fprintf(fp, "end\n\n");
     
-    fprintf(fp, "-- Function to record call in database\n");
-    fprintf(fp, "function record_call(dbh, call_id, stage, ani, dnis, did, provider_ids)\n");
-    fprintf(fp, "    local query = nil\n");
-    fprintf(fp, "    \n");
-    fprintf(fp, "    if stage == \"origin\" then\n");
-    fprintf(fp, "        query = string.format(\n");
-    fprintf(fp, "            \"INSERT INTO call_records (call_id, origin_provider_id, \" ..\n");
-    fprintf(fp, "            \"intermediate_provider_id, final_provider_id, original_ani, \" ..\n");
-    fprintf(fp, "            \"original_dnis, assigned_did, current_stage, status) \" ..\n");
-    fprintf(fp, "            \"VALUES ('%%s', %%s, %%s, %%s, '%%s', '%%s', '%%s', 1, 'active') \" ..\n");
-    fprintf(fp, "            \"ON CONFLICT (call_id) DO UPDATE SET current_stage = 1, updated_at = NOW()\",\n");
-    fprintf(fp, "            call_id, provider_ids.origin or 'NULL', \n");
-    fprintf(fp, "            provider_ids.intermediate or 'NULL',\n");
-    fprintf(fp, "            provider_ids.final or 'NULL',\n");
-    fprintf(fp, "            ani, dnis, did or ''\n");
-    fprintf(fp, "        )\n");
-    fprintf(fp, "    elseif stage == \"intermediate_return\" then\n");
-    fprintf(fp, "        query = string.format(\n");
-    fprintf(fp, "            \"UPDATE call_records SET current_stage = 3, updated_at = NOW() \" ..\n");
-    fprintf(fp, "            \"WHERE call_id = '%%s'\",\n");
-    fprintf(fp, "            call_id\n");
-    fprintf(fp, "        )\n");
-    fprintf(fp, "    end\n");
-    fprintf(fp, "    \n");
-    fprintf(fp, "    if query then\n");
-    fprintf(fp, "        dbh:query(query)\n");
-    fprintf(fp, "    end\n");
-    fprintf(fp, "end\n\n");
-    
     fprintf(fp, "-- Main execution\n");
     fprintf(fp, "local stage = argv[1] or \"unknown\"\n");
     fprintf(fp, "local route_id = argv[2] or \"0\"\n");
@@ -4386,6 +4273,8 @@ int fs_generate_corrected_lua_handler(void) {
     
     fprintf(fp, "if stage == \"origin\" then\n");
     fprintf(fp, "    -- S1 -> S2: Incoming call from origin server\n");
+    fprintf(fp, "    freeswitch.consoleLog(\"INFO\", \"Processing origin stage for route \" .. route_id .. \"\\n\")\n");
+    fprintf(fp, "    \n");
     fprintf(fp, "    -- Store original ANI (ANI-1) and DNIS (DNIS-1)\n");
     fprintf(fp, "    session:setVariable(\"original_ani\", ani)\n");
     fprintf(fp, "    session:setVariable(\"original_dnis\", dnis)\n");
@@ -4393,14 +4282,17 @@ int fs_generate_corrected_lua_handler(void) {
     fprintf(fp, "    session:setVariable(\"sip_h_X-Original-DNIS\", dnis)\n");
     fprintf(fp, "    session:setVariable(\"sip_h_X-Call-ID\", call_uuid)\n");
     fprintf(fp, "    \n");
-    fprintf(fp, "    -- Get intermediate provider ID\n");
+    fprintf(fp, "    -- Get intermediate provider ID from UUID\n");
     fprintf(fp, "    local inter_provider_id = 0\n");
-    fprintf(fp, "    local query = string.format(\n");
-    fprintf(fp, "        \"SELECT id FROM providers WHERE uuid = '%%s'\", next_provider\n");
-    fprintf(fp, "    )\n");
-    fprintf(fp, "    dbh:query(query, function(row)\n");
-    fprintf(fp, "        inter_provider_id = tonumber(row.id)\n");
-    fprintf(fp, "    end)\n");
+    fprintf(fp, "    if next_provider and next_provider ~= \"\" then\n");
+    fprintf(fp, "        local query = string.format(\n");
+    fprintf(fp, "            \"SELECT id FROM providers WHERE uuid = '%%s'\", next_provider\n");
+    fprintf(fp, "        )\n");
+    fprintf(fp, "        dbh:query(query, function(row)\n");
+    fprintf(fp, "            inter_provider_id = tonumber(row.id)\n");
+    fprintf(fp, "        end)\n");
+    fprintf(fp, "        freeswitch.consoleLog(\"INFO\", \"Intermediate provider UUID: \" .. next_provider .. \" ID: \" .. inter_provider_id .. \"\\n\")\n");
+    fprintf(fp, "    end\n");
     fprintf(fp, "    \n");
     fprintf(fp, "    -- Allocate a DID from the pool\n");
     fprintf(fp, "    local allocated_did = allocate_did(dbh, ani, dnis, call_uuid, inter_provider_id)\n");
@@ -4411,14 +4303,6 @@ int fs_generate_corrected_lua_handler(void) {
     fprintf(fp, "        dbh:release()\n");
     fprintf(fp, "        return\n");
     fprintf(fp, "    end\n");
-    fprintf(fp, "    \n");
-    fprintf(fp, "    -- Record call in database\n");
-    fprintf(fp, "    local provider_ids = {\n");
-    fprintf(fp, "        origin = session:getVariable(\"origin_provider_id\"),\n");
-    fprintf(fp, "        intermediate = tostring(inter_provider_id),\n");
-    fprintf(fp, "        final = session:getVariable(\"final_provider_id\")\n");
-    fprintf(fp, "    }\n");
-    fprintf(fp, "    record_call(dbh, call_uuid, \"origin\", ani, dnis, allocated_did, provider_ids)\n");
     fprintf(fp, "    \n");
     fprintf(fp, "    -- S2 -> S3: Forward to intermediate with transformations\n");
     fprintf(fp, "    -- Replace ANI-1 with DNIS-1 (now becomes ANI-2)\n");
@@ -4437,8 +4321,9 @@ int fs_generate_corrected_lua_handler(void) {
     fprintf(fp, "    \n");
     fprintf(fp, "elseif stage == \"intermediate_return\" then\n");
     fprintf(fp, "    -- S3 -> S2: Return call from intermediate server\n");
-    fprintf(fp, "    -- The call comes back with ANI-2 (which was DNIS-1) and DID\n");
+    fprintf(fp, "    freeswitch.consoleLog(\"INFO\", \"Processing intermediate_return stage\\n\")\n");
     fprintf(fp, "    \n");
+    fprintf(fp, "    -- The call comes back with ANI-2 (which was DNIS-1) and DID\n");
     fprintf(fp, "    -- Find the original DNIS-1 and ANI-1 from the DID\n");
     fprintf(fp, "    local original_dnis, original_ani = find_original_dnis(dbh, dnis)\n");
     fprintf(fp, "    \n");
@@ -4449,29 +4334,6 @@ int fs_generate_corrected_lua_handler(void) {
     fprintf(fp, "        dbh:release()\n");
     fprintf(fp, "        return\n");
     fprintf(fp, "    end\n");
-    fprintf(fp, "    \n");
-    fprintf(fp, "    -- Verify this call originated from S1\n");
-    fprintf(fp, "    local call_id = session:getVariable(\"sip_h_X-Call-ID\") or call_uuid\n");
-    fprintf(fp, "    local verify_query = string.format(\n");
-    fprintf(fp, "        \"SELECT COUNT(*) as count FROM call_records \" ..\n");
-    fprintf(fp, "        \"WHERE call_id = '%%s' AND origin_provider_id IS NOT NULL\",\n");
-    fprintf(fp, "        call_id\n");
-    fprintf(fp, "    )\n");
-    fprintf(fp, "    \n");
-    fprintf(fp, "    local is_valid = false\n");
-    fprintf(fp, "    dbh:query(verify_query, function(row)\n");
-    fprintf(fp, "        is_valid = (tonumber(row.count) > 0)\n");
-    fprintf(fp, "    end)\n");
-    fprintf(fp, "    \n");
-    fprintf(fp, "    if not is_valid then\n");
-    fprintf(fp, "        freeswitch.consoleLog(\"ERROR\", \"Call not originated from S1 - rejecting with 503\\n\")\n");
-    fprintf(fp, "        session:hangup(\"SERVICE_UNAVAILABLE\")\n");
-    fprintf(fp, "        dbh:release()\n");
-    fprintf(fp, "        return\n");
-    fprintf(fp, "    end\n");
-    fprintf(fp, "    \n");
-    fprintf(fp, "    -- Update call record\n");
-    fprintf(fp, "    record_call(dbh, call_id, \"intermediate_return\", ani, dnis, nil, {})\n");
     fprintf(fp, "    \n");
     fprintf(fp, "    -- Release the DID back to the pool\n");
     fprintf(fp, "    release_did(dbh, dnis)\n");
@@ -4561,7 +4423,7 @@ int fs_restore_dialplans_from_cache(void) {
     return 0;
 }
 
-// Main function to generate Module 2 route dialplan
+// Main function to generate Module 2 route dialplan - COMPLETE FIXED IMPLEMENTATION
 int fs_generate_module2_route_dialplan(void) {
     database_t *db = get_database();
     if (!db) {
@@ -4574,13 +4436,235 @@ int fs_generate_module2_route_dialplan(void) {
     // Generate the Lua handler first
     fs_generate_corrected_lua_handler();
     
-    // Continue with dialplan generation...
-    // [Rest of the original function implementation]
+    // Generate main public.xml in the CORRECT location (/etc/freeswitch/dialplan/public.xml)
+    char filepath[512];
+    FILE *fp;
     
-    LOG_INFO("Module 2 dialplan generation complete");
-    return 0;
+    snprintf(filepath, sizeof(filepath), "%s/public.xml", DIALPLAN_BASE_DIR);  // FIXED: Use base dir
+    fp = fopen(filepath, "w");
+    if (!fp) {
+        LOG_ERROR("Failed to create public.xml at %s", filepath);
+        return -1;
+    }
+    
+    fprintf(fp, "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n");
+    fprintf(fp, "<include>\n");
+    fprintf(fp, "  <context name=\"public\">\n");
+    fprintf(fp, "    <!-- Module 2 Dynamic Router Generated: %ld -->\n", time(NULL));
+    fprintf(fp, "    <!-- Include all route-specific dialplans from public directory -->\n");
+    fprintf(fp, "    <X-PRE-PROCESS cmd=\"include\" data=\"public/*.xml\"/>\n");
+    fprintf(fp, "  </context>\n");
+    fprintf(fp, "</include>\n");
+    
+    fclose(fp);
+    LOG_INFO("Generated main public dialplan at %s", filepath);
+    
+    // Query all active routes from database with provider details
+    const char *query = 
+        "SELECT r.id, r.uuid, r.name, r.pattern, "
+        "p1.uuid as origin_uuid, p1.name as origin_name, p1.host as origin_host, "
+        "p2.uuid as inter_uuid, p2.name as inter_name, p2.host as inter_host, "
+        "p3.uuid as final_uuid, p3.name as final_name, p3.host as final_host, "
+        "r.priority "
+        "FROM routes r "
+        "LEFT JOIN providers p1 ON r.origin_provider_id = p1.id "
+        "LEFT JOIN providers p2 ON r.intermediate_provider_id = p2.id "
+        "LEFT JOIN providers p3 ON r.final_provider_id = p3.id "
+        "WHERE r.active = true "
+        "ORDER BY r.priority DESC";
+    
+    db_result_t *result = db_query(db, query);
+    if (!result) {
+        LOG_ERROR("Failed to query routes");
+        return -1;
+    }
+    
+    LOG_INFO("Found %d active routes to generate dialplans for", result->num_rows);
+    
+    // Generate individual route dialplans
+    for (int i = 0; i < result->num_rows; i++) {
+        const char *route_id = db_get_value(result, i, 0);
+        const char *route_uuid = db_get_value(result, i, 1);
+        const char *route_name = db_get_value(result, i, 2);
+        const char *pattern = db_get_value(result, i, 3);
+        const char *origin_uuid = db_get_value(result, i, 4);
+        const char *origin_name = db_get_value(result, i, 5);
+        const char *origin_host = db_get_value(result, i, 6);
+        const char *inter_uuid = db_get_value(result, i, 7);
+        const char *inter_name = db_get_value(result, i, 8);
+        const char *inter_host = db_get_value(result, i, 9);
+        const char *final_uuid = db_get_value(result, i, 10);
+        const char *final_name = db_get_value(result, i, 11);
+        const char *priority = db_get_value(result, i, 13);
+        
+        // Validate required fields
+        if (!route_id || !route_name || !pattern) {
+            LOG_WARN("Skipping incomplete route %s", route_name ? route_name : "unknown");
+            continue;
+        }
+        
+        // Generate route-specific dialplan XML in public directory
+        snprintf(filepath, sizeof(filepath), "%s/route_%s.xml", DIALPLAN_DIR, route_id);
+        
+        fp = fopen(filepath, "w");
+        if (!fp) {
+            LOG_ERROR("Failed to create dialplan file for route %s", route_id);
+            continue;
+        }
+        
+        // Remove quotes from pattern if they exist
+        char clean_pattern[256];
+        const char *p_src = pattern;
+        char *p_dst = clean_pattern;
+        while (*p_src) {
+            if (*p_src != '\'' && *p_src != '"') {
+                *p_dst++ = *p_src;
+            }
+            p_src++;
+        }
+        *p_dst = '\0';
+        
+        // Write XML with PROPER context wrapper
+        fprintf(fp, "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n");
+        fprintf(fp, "<!-- Route: %s (UUID: %s) -->\n", route_name, route_uuid ? route_uuid : "none");
+        fprintf(fp, "<!-- Pattern: %s, Priority: %s -->\n", clean_pattern, priority ? priority : "100");
+        fprintf(fp, "<!-- Flow: %s -> S2 -> %s -> S2 -> %s -->\n", 
+                origin_name ? origin_name : "unknown",
+                inter_name ? inter_name : "unknown",
+                final_name ? final_name : "unknown");
+        fprintf(fp, "<!-- Generated: %ld -->\n", time(NULL));
+        fprintf(fp, "<include>\n");
+        fprintf(fp, "  <context name=\"public\">\n");  // CONTEXT WRAPPER
+        fprintf(fp, "\n");
+        
+        // Extension for calls from origin (S1 -> S2)
+        fprintf(fp, "    <!-- Extension for calls from origin: %s -->\n", origin_name ? origin_name : "unknown");
+        fprintf(fp, "    <extension name=\"route_%s_from_origin\">\n", route_id);
+        
+        // Match on source IP if available
+        if (origin_host && strlen(origin_host) > 0) {
+            // Escape dots in IP address for regex
+            char escaped_host[256];
+            const char *src = origin_host;
+            char *dst = escaped_host;
+            while (*src) {
+                if (*src == '.') {
+                    *dst++ = '\\';
+                    *dst++ = '.';
+                } else {
+                    *dst++ = *src;
+                }
+                src++;
+            }
+            *dst = '\0';
+            
+            fprintf(fp, "      <condition field=\"network_addr\" expression=\"^%s$\" break=\"never\">\n", escaped_host);
+            fprintf(fp, "        <action application=\"set\" data=\"route_id=%s\"/>\n", route_id);
+            fprintf(fp, "        <action application=\"set\" data=\"route_name=%s\"/>\n", route_name);
+            fprintf(fp, "        <action application=\"set\" data=\"call_source=origin\"/>\n");
+            fprintf(fp, "      </condition>\n");
+        }
+        
+        // Match on destination number pattern - USE CLEAN PATTERN
+        fprintf(fp, "      <condition field=\"destination_number\" expression=\"^%s$\">\n", clean_pattern);
+        fprintf(fp, "        <action application=\"log\" data=\"INFO S1->S2: Route %s from %s, ANI=${caller_id_number}, DNIS=${destination_number}\"/>\n", 
+                route_name, origin_name ? origin_name : "unknown");
+        fprintf(fp, "        <action application=\"lua\" data=\"route_handler_corrected.lua origin %s %s %s\"/>\n", 
+                route_id, inter_uuid ? inter_uuid : "", final_uuid ? final_uuid : "");
+        fprintf(fp, "      </condition>\n");
+        fprintf(fp, "    </extension>\n");
+        fprintf(fp, "\n");
+        
+        // Extension for return calls from intermediate (S3 -> S2)
+        fprintf(fp, "    <!-- Extension for return calls from intermediate: %s -->\n", inter_name ? inter_name : "unknown");
+        fprintf(fp, "    <extension name=\"route_%s_from_intermediate\">\n", route_id);
+        
+        // Match on source IP if available
+        if (inter_host && strlen(inter_host) > 0) {
+            // Escape dots in IP address for regex
+            char escaped_host[256];
+            const char *src = inter_host;
+            char *dst = escaped_host;
+            while (*src) {
+                if (*src == '.') {
+                    *dst++ = '\\';
+                    *dst++ = '.';
+                } else {
+                    *dst++ = *src;
+               }
+               src++;
+           }
+           *dst = '\0';
+           
+           fprintf(fp, "      <condition field=\"network_addr\" expression=\"^%s$\" break=\"never\">\n", escaped_host);
+           fprintf(fp, "        <action application=\"set\" data=\"route_id=%s\"/>\n", route_id);
+           fprintf(fp, "        <action application=\"set\" data=\"route_name=%s\"/>\n", route_name);
+           fprintf(fp, "        <action application=\"set\" data=\"call_source=intermediate\"/>\n");
+           fprintf(fp, "      </condition>\n");
+       }
+       
+       // Match any DID as destination
+       fprintf(fp, "      <condition field=\"destination_number\" expression=\"^(.+)$\">\n");
+       fprintf(fp, "        <action application=\"log\" data=\"INFO S3->S2: Route %s from %s, ANI=${caller_id_number}, DID=${destination_number}\"/>\n", 
+               route_name, inter_name ? inter_name : "unknown");
+       fprintf(fp, "        <action application=\"lua\" data=\"route_handler_corrected.lua intermediate_return %s %s %s\"/>\n",
+               route_id, origin_uuid ? origin_uuid : "", final_uuid ? final_uuid : "");
+       fprintf(fp, "      </condition>\n");
+       fprintf(fp, "    </extension>\n");
+       fprintf(fp, "\n");
+       
+       fprintf(fp, "  </context>\n");  // CLOSE CONTEXT
+       fprintf(fp, "</include>\n");
+       
+       fclose(fp);
+       
+       // Cache the dialplan
+       char xml_content[8192];
+       FILE *read_fp = fopen(filepath, "r");
+       if (read_fp) {
+           size_t len = fread(xml_content, 1, sizeof(xml_content) - 1, read_fp);
+           xml_content[len] = '\0';
+           fclose(read_fp);
+           cache_dialplan(route_id, route_name, xml_content, filepath);
+       }
+       
+       LOG_INFO("Generated dialplan for route %s: %s -> %s -> %s (file: %s)", 
+               route_name, 
+               origin_name ? origin_name : "unknown", 
+               inter_name ? inter_name : "unknown", 
+               final_name ? final_name : "unknown",
+               filepath);
+   }
+   
+   db_free_result(result);
+   
+   // Generate a default catch-all extension if no routes match
+   /*snprintf(filepath, sizeof(filepath), "%s/default_catch_all.xml", DIALPLAN_DIR);
+   fp = fopen(filepath, "w");
+   if (fp) {
+       fprintf(fp, "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n");
+       fprintf(fp, "<!-- Default catch-all for unmatched calls -->\n");
+       fprintf(fp, "<include>\n");
+       fprintf(fp, "  <context name=\"public\">\n");
+       fprintf(fp, "    <extension name=\"default_catch_all\" continue=\"false\">\n");
+       fprintf(fp, "      <condition field=\"destination_number\" expression=\"^(.*)$\">\n");
+       fprintf(fp, "        <action application=\"log\" data=\"WARNING No route found for ${destination_number} from ${network_addr}\"/>\n");
+       fprintf(fp, "        <action application=\"respond\" data=\"404 Not Found\"/>\n");
+       fprintf(fp, "      </condition>\n");
+       fprintf(fp, "    </extension>\n");
+       fprintf(fp, "  </context>\n");
+       fprintf(fp, "</include>\n");
+       fclose(fp);
+       LOG_INFO("Generated default catch-all extension");
+   }*/
+   
+   // Reload FreeSWITCH configuration
+   fs_reload_config();
+   
+   LOG_INFO("Module 2 dialplan generation complete - generated %d route dialplans", result->num_rows);
+   return 0;
 }
-
+                    
 /**
  * FreeSWITCH Router API Module
  * 
