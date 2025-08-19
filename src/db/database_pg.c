@@ -1,4 +1,4 @@
-// database_pg.c - Fixed PostgreSQL database implementation with proper boolean handling
+// database_pg.c - Complete PostgreSQL 12 implementation with dynamic queries
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -11,14 +11,33 @@ struct database {
     PGconn *conn;
     pthread_mutex_t mutex;
     char *connection_string;
+    int reconnect_attempts;
+    int max_reconnect_attempts;
 };
 
 // Global database instance
 static database_t *g_database = NULL;
 
+// Helper function to escape strings for SQL
+static char* escape_string(PGconn *conn, const char *str) {
+    if (!str) return strdup("NULL");
+    
+    size_t len = strlen(str);
+    char *escaped = malloc(2 * len + 1);
+    PQescapeStringConn(conn, escaped, str, len, NULL);
+    return escaped;
+}
+
 // Convert PGresult to db_result_t
 static db_result_t* pg_to_db_result(PGresult *pg_res) {
     if (!pg_res) return NULL;
+    
+    ExecStatusType status = PQresultStatus(pg_res);
+    if (status != PGRES_TUPLES_OK && status != PGRES_COMMAND_OK) {
+        LOG_ERROR("Query failed: %s", PQerrorMessage(g_database->conn));
+        PQclear(pg_res);
+        return NULL;
+    }
     
     int num_rows = PQntuples(pg_res);
     int num_cols = PQnfields(pg_res);
@@ -60,22 +79,51 @@ static db_result_t* pg_to_db_result(PGresult *pg_res) {
     return result;
 }
 
+// Reconnect to database if connection lost
+static int db_reconnect(database_t *db) {
+    if (!db) return -1;
+    
+    if (PQstatus(db->conn) == CONNECTION_OK) {
+        return 0;
+    }
+    
+    LOG_WARN("Database connection lost, attempting to reconnect...");
+    
+    for (int i = 0; i < db->max_reconnect_attempts; i++) {
+        PQreset(db->conn);
+        
+        if (PQstatus(db->conn) == CONNECTION_OK) {
+            LOG_INFO("Database reconnected successfully");
+            return 0;
+        }
+        
+        LOG_WARN("Reconnect attempt %d/%d failed", i+1, db->max_reconnect_attempts);
+        usleep(1000000); // Wait 1 second before retry
+    }
+    
+    LOG_ERROR("Failed to reconnect to database after %d attempts", db->max_reconnect_attempts);
+    return -1;
+}
+
 database_t* db_init(const char *connection_string) {
     if (g_database) return g_database;
     
     database_t *db = calloc(1, sizeof(database_t));
     if (!db) return NULL;
     
-    // Use environment variable or default connection string
+    // Use environment variable or provided connection string
     const char *conn_str = connection_string;
     if (!conn_str) {
         conn_str = getenv("ROUTER_DB_CONNECTION");
         if (!conn_str) {
-            conn_str = "host=localhost dbname=router_db user=router password=router123";
+            conn_str = "host=localhost dbname=router_db user=router password=router123 connect_timeout=10";
         }
     }
     
     db->connection_string = strdup(conn_str);
+    db->max_reconnect_attempts = 3;
+    db->reconnect_attempts = 0;
+    
     db->conn = PQconnectdb(conn_str);
     
     if (PQstatus(db->conn) != CONNECTION_OK) {
@@ -91,39 +139,9 @@ database_t* db_init(const char *connection_string) {
     // Set client encoding
     PQsetClientEncoding(db->conn, "UTF8");
     
-    // Create tables if they don't exist
-    const char *schema_check = "SELECT 1 FROM information_schema.tables WHERE table_name = 'providers'";
-    PGresult *res = PQexec(db->conn, schema_check);
-    
-    if (PQntuples(res) == 0) {
-        PQclear(res);
-        LOG_INFO("Creating database schema...");
-        
-        // Load and execute schema
-        FILE *fp = fopen("scripts/schema_pg.sql", "r");
-        if (fp) {
-            fseek(fp, 0, SEEK_END);
-            long size = ftell(fp);
-            fseek(fp, 0, SEEK_SET);
-            
-            char *schema = malloc(size + 1);
-            fread(schema, 1, size, fp);
-            schema[size] = '\0';
-            fclose(fp);
-            
-            res = PQexec(db->conn, schema);
-            if (PQresultStatus(res) != PGRES_COMMAND_OK) {
-                LOG_ERROR("Failed to create schema: %s", PQerrorMessage(db->conn));
-            } else {
-                LOG_INFO("Database schema created successfully");
-            }
-            
-            PQclear(res);
-            free(schema);
-        }
-    } else {
-        PQclear(res);
-    }
+    // Enable autocommit
+    PGresult *res = PQexec(db->conn, "SET autocommit TO on");
+    PQclear(res);
     
     g_database = db;
     LOG_INFO("Connected to PostgreSQL database");
@@ -152,71 +170,20 @@ void db_close(database_t *db) {
     free(db);
 }
 
-// Fix SQL queries with boolean values
-static char* fix_boolean_query(const char *query) {
-    char *fixed = strdup(query);
-    char *pos;
-    
-    // Replace "= 1" with "= true" and "= 0" with "= false" for boolean columns
-    // This is a simple implementation - in production, use proper SQL parsing
-    
-    // Common boolean column patterns
-    const char *bool_patterns[] = {
-        "active = 1", "active = true",
-        "active = 0", "active = false",
-        "in_use = 1", "in_use = true", 
-        "in_use = 0", "in_use = false",
-        NULL, NULL
-    };
-    
-    for (int i = 0; bool_patterns[i]; i += 2) {
-        while ((pos = strstr(fixed, bool_patterns[i])) != NULL) {
-            size_t before_len = pos - fixed;
-            size_t pattern_len = strlen(bool_patterns[i]);
-            size_t replace_len = strlen(bool_patterns[i + 1]);
-            size_t after_len = strlen(pos + pattern_len);
-            
-            char *new_query = malloc(before_len + replace_len + after_len + 1);
-            memcpy(new_query, fixed, before_len);
-            memcpy(new_query + before_len, bool_patterns[i + 1], replace_len);
-            memcpy(new_query + before_len + replace_len, pos + pattern_len, after_len + 1);
-            
-            free(fixed);
-            fixed = new_query;
-        }
-    }
-    
-    return fixed;
-}
-
 db_result_t* db_query(database_t *db, const char *query) {
     if (!db || !query) return NULL;
     
     pthread_mutex_lock(&db->mutex);
     
-    // Check connection
-    if (PQstatus(db->conn) != CONNECTION_OK) {
-        LOG_WARN("Database connection lost, reconnecting...");
-        PQreset(db->conn);
-    }
-    
-    // Fix boolean values in query
-    char *fixed_query = fix_boolean_query(query);
-    
-    PGresult *res = PQexec(db->conn, fixed_query);
-    
-    if (PQresultStatus(res) != PGRES_TUPLES_OK && 
-        PQresultStatus(res) != PGRES_COMMAND_OK) {
-        LOG_ERROR("Query failed: %s", PQerrorMessage(db->conn));
-        PQclear(res);
-        free(fixed_query);
+    // Check connection and reconnect if needed
+    if (db_reconnect(db) != 0) {
         pthread_mutex_unlock(&db->mutex);
         return NULL;
     }
     
+    PGresult *res = PQexec(db->conn, query);
     db_result_t *result = pg_to_db_result(res);
     
-    free(fixed_query);
     pthread_mutex_unlock(&db->mutex);
     
     return result;
@@ -249,23 +216,20 @@ const char* db_get_value(db_result_t *result, int row, int col) {
     return result->data[row * result->num_cols + col];
 }
 
+// Prepared statement implementation
+typedef struct {
+    database_t *db;
+    char *sql;
+    char **params;
+    int *param_lengths;
+    int *param_formats;
+    Oid *param_types;
+    int param_count;
+    int param_capacity;
+} pg_stmt_t;
+
 db_stmt_t* db_prepare(database_t *db, const char *sql) {
     if (!db || !sql) return NULL;
-    
-    pthread_mutex_lock(&db->mutex);
-    
-    // PostgreSQL doesn't have persistent prepared statements like SQLite
-    // We'll store the SQL and parameters in a custom structure
-    typedef struct {
-        database_t *db;
-        char *sql;
-        char **params;
-        int *param_lengths;
-        int *param_formats;
-        Oid *param_types;
-        int param_count;
-        int param_capacity;
-    } pg_stmt_t;
     
     pg_stmt_t *stmt = calloc(1, sizeof(pg_stmt_t));
     stmt->db = db;
@@ -276,24 +240,11 @@ db_stmt_t* db_prepare(database_t *db, const char *sql) {
     stmt->param_formats = calloc(stmt->param_capacity, sizeof(int));
     stmt->param_types = calloc(stmt->param_capacity, sizeof(Oid));
     
-    pthread_mutex_unlock(&db->mutex);
-    
     return (db_stmt_t*)stmt;
 }
 
 int db_bind_string(db_stmt_t *stmt, int index, const char *value) {
     if (!stmt) return -1;
-    
-    typedef struct {
-        database_t *db;
-        char *sql;
-        char **params;
-        int *param_lengths;
-        int *param_formats;
-        Oid *param_types;
-        int param_count;
-        int param_capacity;
-    } pg_stmt_t;
     
     pg_stmt_t *pg_stmt = (pg_stmt_t*)stmt;
     
@@ -333,38 +284,22 @@ int db_bind_int(db_stmt_t *stmt, int index, int value) {
     return db_bind_string(stmt, index, buffer);
 }
 
-// Helper to convert SQL with proper boolean values
-static char* convert_sql_booleans(const char *sql) {
-    char *converted = strdup(sql);
+// Convert SQL placeholders from ? to $1, $2, etc.
+static char* convert_sql_placeholders(const char *sql) {
+    char *converted = malloc(strlen(sql) * 2);
+    char *dest = converted;
+    const char *src = sql;
+    int param_num = 1;
     
-    // Check if SQL contains boolean column inserts
-    if (strstr(sql, "active) VALUES") || strstr(sql, "in_use) VALUES")) {
-        // Find the VALUES clause
-        char *values_pos = strstr(converted, "VALUES");
-        if (values_pos) {
-            // Look for ", 1)" or ", 0)" patterns and replace with ", true)" or ", false)"
-            char *pos = values_pos;
-            while ((pos = strstr(pos, ", 1)")) != NULL) {
-                // Check if this is likely a boolean (preceded by $N or ,)
-                if (pos > converted && (*(pos-1) == ',' || *(pos-1) == ' ')) {
-                    memcpy(pos, ", true)", 7);
-                    pos += 7;
-                } else {
-                    pos += 4;
-                }
-            }
-            
-            pos = values_pos;
-            while ((pos = strstr(pos, ", 0)")) != NULL) {
-                if (pos > converted && (*(pos-1) == ',' || *(pos-1) == ' ')) {
-                    memcpy(pos, ", false)", 8);
-                    pos += 8;
-                } else {
-                    pos += 4;
-                }
-            }
+    while (*src) {
+        if (*src == '?') {
+            dest += sprintf(dest, "$%d", param_num++);
+        } else {
+            *dest++ = *src;
         }
+        src++;
     }
+    *dest = '\0';
     
     return converted;
 }
@@ -372,58 +307,17 @@ static char* convert_sql_booleans(const char *sql) {
 int db_execute(db_stmt_t *stmt) {
     if (!stmt) return -1;
     
-    typedef struct {
-        database_t *db;
-        char *sql;
-        char **params;
-        int *param_lengths;
-        int *param_formats;
-        Oid *param_types;
-        int param_count;
-        int param_capacity;
-    } pg_stmt_t;
-    
     pg_stmt_t *pg_stmt = (pg_stmt_t*)stmt;
     
     pthread_mutex_lock(&pg_stmt->db->mutex);
     
-    // Convert SQL from SQLite style (?) to PostgreSQL style ($1, $2, etc.)
-    char *pg_sql = convert_sql_booleans(pg_stmt->sql);
-    char *pos = pg_sql;
-    int param_num = 1;
-    
-    while ((pos = strchr(pos, '?')) != NULL) {
-        char param_str[16];
-        snprintf(param_str, sizeof(param_str), "$%d", param_num++);
-        
-        // Replace ? with $N
-        size_t before_len = pos - pg_sql;
-        size_t after_len = strlen(pos + 1);
-        char *new_sql = malloc(before_len + strlen(param_str) + after_len + 1);
-        
-        memcpy(new_sql, pg_sql, before_len);
-        memcpy(new_sql + before_len, param_str, strlen(param_str));
-        memcpy(new_sql + before_len + strlen(param_str), pos + 1, after_len + 1);
-        
-        free(pg_sql);
-        pg_sql = new_sql;
-        pos = pg_sql + before_len + strlen(param_str);
+    // Check connection
+    if (db_reconnect(pg_stmt->db) != 0) {
+        pthread_mutex_unlock(&pg_stmt->db->mutex);
+        return -1;
     }
     
-    // Special handling for boolean values in INSERT statements
-    if (strstr(pg_sql, "active) VALUES") && strstr(pg_sql, ", 1)")) {
-        char *temp = pg_sql;
-        pg_sql = malloc(strlen(temp) + 20);
-        strcpy(pg_sql, temp);
-        
-        // Replace ", 1)" with ", true)"
-        char *bool_pos = strstr(pg_sql, ", 1)");
-        if (bool_pos) {
-            strcpy(bool_pos, ", true)");
-        }
-        
-        free(temp);
-    }
+    char *pg_sql = convert_sql_placeholders(pg_stmt->sql);
     
     PGresult *res = PQexecParams(pg_stmt->db->conn,
                                  pg_sql,
@@ -432,7 +326,7 @@ int db_execute(db_stmt_t *stmt) {
                                  (const char * const *)pg_stmt->params,
                                  pg_stmt->param_lengths,
                                  pg_stmt->param_formats,
-                                 0); // text result format
+                                 0);
     
     free(pg_sql);
     
@@ -452,42 +346,17 @@ int db_execute(db_stmt_t *stmt) {
 db_result_t* db_execute_query(db_stmt_t *stmt) {
     if (!stmt) return NULL;
     
-    typedef struct {
-        database_t *db;
-        char *sql;
-        char **params;
-        int *param_lengths;
-        int *param_formats;
-        Oid *param_types;
-        int param_count;
-        int param_capacity;
-    } pg_stmt_t;
-    
     pg_stmt_t *pg_stmt = (pg_stmt_t*)stmt;
     
     pthread_mutex_lock(&pg_stmt->db->mutex);
     
-    // Convert SQL from SQLite style to PostgreSQL style
-    char *pg_sql = strdup(pg_stmt->sql);
-    char *pos = pg_sql;
-    int param_num = 1;
-    
-    while ((pos = strchr(pos, '?')) != NULL) {
-        char param_str[16];
-        snprintf(param_str, sizeof(param_str), "$%d", param_num++);
-        
-        size_t before_len = pos - pg_sql;
-        size_t after_len = strlen(pos + 1);
-        char *new_sql = malloc(before_len + strlen(param_str) + after_len + 1);
-        
-        memcpy(new_sql, pg_sql, before_len);
-        memcpy(new_sql + before_len, param_str, strlen(param_str));
-        memcpy(new_sql + before_len + strlen(param_str), pos + 1, after_len + 1);
-        
-        free(pg_sql);
-        pg_sql = new_sql;
-        pos = pg_sql + before_len + strlen(param_str);
+    // Check connection
+    if (db_reconnect(pg_stmt->db) != 0) {
+        pthread_mutex_unlock(&pg_stmt->db->mutex);
+        return NULL;
     }
+    
+    char *pg_sql = convert_sql_placeholders(pg_stmt->sql);
     
     PGresult *res = PQexecParams(pg_stmt->db->conn,
                                  pg_sql,
@@ -509,17 +378,6 @@ db_result_t* db_execute_query(db_stmt_t *stmt) {
 
 void db_finalize(db_stmt_t *stmt) {
     if (!stmt) return;
-    
-    typedef struct {
-        database_t *db;
-        char *sql;
-        char **params;
-        int *param_lengths;
-        int *param_formats;
-        Oid *param_types;
-        int param_count;
-        int param_capacity;
-    } pg_stmt_t;
     
     pg_stmt_t *pg_stmt = (pg_stmt_t*)stmt;
     

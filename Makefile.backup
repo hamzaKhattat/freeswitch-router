@@ -1,0 +1,86 @@
+# FreeSWITCH Router Makefile - Module 2 Fixed
+
+CC = gcc
+CFLAGS = -Wall -Wextra -g -I./include -pthread
+LDFLAGS = -lpq -lpthread -lmicrohttpd -ljson-c -lreadline -luuid
+
+# Directories
+SRC_DIR = src
+BUILD_DIR = build
+BIN_DIR = bin
+
+# Main target
+TARGET = router
+
+# Source files
+SRCS = $(SRC_DIR)/main.c \
+       $(SRC_DIR)/core/config.c \
+       $(SRC_DIR)/core/models.c \
+       $(SRC_DIR)/core/server.c \
+       $(SRC_DIR)/core/utils.c \
+       $(SRC_DIR)/db/cache.c \
+       $(SRC_DIR)/db/database_pg.c \
+       $(SRC_DIR)/router/router.c \
+       $(SRC_DIR)/router/load_balancer.c \
+       $(SRC_DIR)/cli/cli.c \
+       $(SRC_DIR)/cli/cli_commands.c \
+       $(SRC_DIR)/commands/provider_cmd.c \
+       $(SRC_DIR)/commands/route_cmd.c \
+       $(SRC_DIR)/commands/did_cmd.c \
+       $(SRC_DIR)/commands/monitor_cmd.c \
+       $(SRC_DIR)/commands/stats_cmd.c \
+       $(SRC_DIR)/commands/calls_cmd.c \
+       $(SRC_DIR)/commands/sip_cmd.c \
+       $(SRC_DIR)/commands/validation_cmd.c \
+       $(SRC_DIR)/sip/freeswitch_handler.c \
+       $(SRC_DIR)/sip/sip_server_dynamic.c \
+       $(SRC_DIR)/sip/sip_server_global.c \
+       $(SRC_DIR)/api/handlers.c \
+       $(SRC_DIR)/api/route_handler.c \
+       $(SRC_DIR)/freeswitch/fs_xml_generator.c \
+       $(SRC_DIR)/freeswitch/fs_generate_module2_dialplan.c \
+       $(SRC_DIR)/utils/logger.c \
+       $(SRC_DIR)/validation/call_validator.c \
+       $(SRC_DIR)/validation/state_sync_service.c
+
+# Object files
+OBJS = $(SRCS:$(SRC_DIR)/%.c=$(BUILD_DIR)/%.o)
+
+# Default target
+all: directories $(TARGET)
+
+# Create directories
+directories:
+	@mkdir -p $(BUILD_DIR)
+	@mkdir -p $(BUILD_DIR)/core
+	@mkdir -p $(BUILD_DIR)/db
+	@mkdir -p $(BUILD_DIR)/router
+	@mkdir -p $(BUILD_DIR)/cli
+	@mkdir -p $(BUILD_DIR)/commands
+	@mkdir -p $(BUILD_DIR)/sip
+	@mkdir -p $(BUILD_DIR)/api
+	@mkdir -p $(BUILD_DIR)/freeswitch
+	@mkdir -p $(BUILD_DIR)/utils
+	@mkdir -p $(BUILD_DIR)/validation
+	@mkdir -p $(BIN_DIR)
+
+# Build target
+$(TARGET): $(OBJS)
+	$(CC) $(OBJS) -o $@ $(LDFLAGS)
+	@echo "Build complete: $(TARGET)"
+
+# Compile source files
+$(BUILD_DIR)/%.o: $(SRC_DIR)/%.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+# Clean
+clean:
+	rm -rf $(BUILD_DIR) $(TARGET)
+
+# Install
+install: $(TARGET)
+	cp $(TARGET) /usr/local/bin/fs-router
+	@echo "Installed to /usr/local/bin/fs-router"
+
+.PHONY: all clean install directories

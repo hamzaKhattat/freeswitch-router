@@ -1,73 +1,67 @@
+# Module 2 Complete Makefile
+
 CC = gcc
-CFLAGS = -Wall -O2 -g -pthread -I./include -I/usr/include/postgresql
-LDFLAGS = -lpq -lpthread -lreadline -lm -luuid -ljson-c -lmicrohttpd
+CFLAGS = -Wall -Wextra -g -I./include -I/usr/include/postgresql -pthread
+LDFLAGS = -lpq -lpthread -lreadline -ljson-c -lmicrohttpd -luuid -lcurl
 
-# ESL configuration
-ESL_PATH = /usr/local/src/freeswitch/libs/esl
-ESL_LIB = $(ESL_PATH)/libesl.a
-ESL_INC = -I$(ESL_PATH)/src/include
+# Directories
+BUILD_DIR = build
+SRC_DIR = src
 
-# Check if ESL exists
-HAS_ESL := $(shell test -f $(ESL_LIB) && echo yes || echo no)
+# Create build directories
+$(shell mkdir -p $(BUILD_DIR)/api $(BUILD_DIR)/cli $(BUILD_DIR)/commands \
+                 $(BUILD_DIR)/core $(BUILD_DIR)/db $(BUILD_DIR)/router \
+                 $(BUILD_DIR)/sip $(BUILD_DIR)/utils $(BUILD_DIR)/validation \
+                 $(BUILD_DIR)/freeswitch)
+OBJS = $(BUILD_DIR)/main.o \
+       $(BUILD_DIR)/core/config.o \
+       $(BUILD_DIR)/core/models.o \
+       $(BUILD_DIR)/core/server.o \
+       $(BUILD_DIR)/core/utils.o \
+       $(BUILD_DIR)/db/cache.o \
+       $(BUILD_DIR)/db/database_pg.o \
+       $(BUILD_DIR)/router/router.o \
+       $(BUILD_DIR)/router/load_balancer.o \
+       $(BUILD_DIR)/cli/cli.o \
+       $(BUILD_DIR)/cli/cli_commands.o \
+       $(BUILD_DIR)/commands/provider_cmd.o \
+       $(BUILD_DIR)/commands/route_cmd.o \
+       $(BUILD_DIR)/commands/did_cmd.o \
+       $(BUILD_DIR)/commands/monitor_cmd.o \
+       $(BUILD_DIR)/commands/stats_cmd.o \
+       $(BUILD_DIR)/commands/calls_cmd.o \
+       $(BUILD_DIR)/commands/sip_cmd.o \
+       $(BUILD_DIR)/commands/validation_cmd.o \
+       $(BUILD_DIR)/commands/module2_cmd.o \
+       $(BUILD_DIR)/sip/sip_server_dynamic.o \
+       $(BUILD_DIR)/sip/sip_server_global.o \
+       $(BUILD_DIR)/sip/freeswitch_handler.o \
+       $(BUILD_DIR)/api/handlers.o \
+       $(BUILD_DIR)/api/route_handler.o \
+       $(BUILD_DIR)/freeswitch/fs_xml_generator.o \
+       $(BUILD_DIR)/freeswitch/fs_generate_module2_dialplan.o \
+       $(BUILD_DIR)/validation/call_validator.o \
+       $(BUILD_DIR)/utils/logger.o
+# Target
+TARGET = router
 
-ifeq ($(HAS_ESL),yes)
-    CFLAGS += $(ESL_INC) -DHAS_ESL
-    EXTRA_LIBS = $(ESL_LIB)
-    EXTRA_SRC = src/freeswitch/fs_router_api.c
-else
-    EXTRA_LIBS =
-    EXTRA_SRC =
-endif
+all: $(TARGET)
 
-# Main source files (no duplicates, no tests)
-SOURCES = src/main.c \
-    src/api/handlers.c \
-    src/api/route_handler.c \
-    src/cli/cli.c \
-    src/cli/cli_commands.c \
-    src/commands/calls_cmd.c \
-    src/commands/did_cmd.c \
-    src/commands/monitor_cmd.c \
-    src/commands/monitor_fix.c \
-    src/commands/provider_cmd.c \
-    src/commands/provider_mgmt.c \
-    src/commands/route_cmd.c \
-    src/commands/sip_cmd.c \
-    src/commands/stats_cmd.c \
-    src/core/config.c \
-    src/core/models.c \
-    src/core/server.c \
-    src/core/utils.c \
-    src/db/cache.c \
-    src/db/database_pg.c \
-    src/router/load_balancer.c \
-    src/router/router.c \
-    src/sip/freeswitch_handler.c \
-    src/sip/sip_server_dynamic.c \
-    src/sip/sip_server_global.c \
-    src/freeswitch/freeswitch_integration.c \
-    src/freeswitch/fs_xml_generator.c \
-    src/utils/logger.c \
-    $(EXTRA_SRC)
+# Pattern rules
+$(BUILD_DIR)/%.o: $(SRC_DIR)/%.c
+	@echo "Compiling $<..."
+	@$(CC) $(CFLAGS) -c $< -o $@
 
-OBJECTS = $(SOURCES:.c=.o)
-
-all: router
-
-router: $(OBJECTS)
-	$(CC) $(OBJECTS) -o router $(EXTRA_LIBS) $(LDFLAGS)
-
-%.o: %.c
-	$(CC) $(CFLAGS) -c $< -o $@
+# Main target
+$(TARGET): $(OBJS)
+	@echo "Linking $(TARGET)..."
+	@$(CC) $(OBJS) -o $@ $(LDFLAGS)
+	@echo "✓ Build successful"
 
 clean:
-	rm -f $(OBJECTS) router
-	find src -name "*.o" -delete
+	rm -rf $(BUILD_DIR) $(TARGET)
 
-install: router
-	mkdir -p /opt/freeswitch-router/bin
-	cp router /opt/freeswitch-router/bin/
-	chmod +x /opt/freeswitch-router/bin/router
-	ln -sf /opt/freeswitch-router/bin/router /usr/local/bin/router
+install: $(TARGET)
+	install -m 755 $(TARGET) /usr/local/bin/fs-router
 
 .PHONY: all clean install
